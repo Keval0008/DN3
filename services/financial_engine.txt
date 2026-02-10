@@ -1,0 +1,330 @@
+from typing import Dict, List, Optional, Any
+import pandas as pd
+from thefuzz import fuzz
+from utils.normalize import norm_col, norm_key, values_equal
+
+
+def _build_composite_key(df: pd.DataFrame, key_cols: List[str]) -> pd.Series:
+    """Build composite key from multiple columns."""
+    # Normalize each key column and concatenate with |
+    key_parts = [df[col].apply(norm_key) for col in key_cols]
+    return key_parts[0].str.cat(key_parts[1:], sep='|')
+
+
+def _read_financial_file(path: str) -> pd.DataFrame:
+    """Read financial Excel file and normalize column names."""
+    df = pd.read_excel(path, engine='calamine')
+    # Remove unnamed columns
+    df = df.loc[:, ~df.columns.to_series().apply(lambda x: str(x).startswith('Unnamed'))]
+    # Normalize column names
+    df.columns = [norm_col(col) for col in df.columns]
+    return df
+
+
+def run_mastergroup_validation(df: pd.DataFrame, threshold: int = 70) -> pd.DataFrame:
+    """
+    Analysis 1: Mastergroup Mapping Validation
+    
+    Uses fuzzy matching to validate if Site Customer Name logically matches Mastergroup Name.
+    Returns the dataframe with added 'Match Status' and 'Fuzzy Score' columns.
+    
+    Args:
+        df: DataFrame with 'Mastergroup Name' and 'Site Customer Name' columns
+        threshold: Minimum fuzzy score for a match (default: 70)
+    
+    Returns:
+        DataFrame with 'Match Status' (Matched/Not Matched) and 'Fuzzy Score' columns
+    """
+    result_df = df.copy()
+    
+    def compute_match(row):
+        mastergroup = str(row.get('Mastergroup Name', '')).strip()
+        site_customer = str(row.get('Site Customer Name', '')).strip()
+        
+        if not mastergroup or not site_customer:
+            return 0, 'Not Matched'
+        
+        # Use token_set_ratio for better matching (handles word order, extra words)
+        score = fuzz.token_set_ratio(mastergroup, site_customer)
+        status = 'Matched' if score >= threshold else 'Not Matched'
+        
+        return score, status
+    
+    # Apply fuzzy matching
+    result_df[['Fuzzy Score', 'Match Status']] = result_df.apply(
+        lambda row: pd.Series(compute_match(row)), axis=1
+    )
+    
+    return result_df
+
+
+def run_non_financial_comparison(
+    df_current: pd.DataFrame,
+    df_previous: pd.DataFrame,
+    key_cols: List[str],
+    compare_cols: List[str]
+) -> pd.DataFrame:
+    """
+    Analysis 2: Non-Financial Field Comparison
+    
+    Compares non-financial fields between current and previous files.
+    Identifies Added, Deleted, and Modified records.
+    
+    Args:
+        df_current: Current period DataFrame
+        df_previous: Previous period DataFrame
+        key_cols: List of key column names
+        compare_cols: List of columns to compare
+    
+    Returns:
+        DataFrame with Change Type and detail columns
+    """
+    # Build composite keys
+    df_current = df_current.copy()
+    df_previous = df_previous.copy()
+    
+    df_current['_composite_key'] = _build_composite_key(df_current, key_cols)
+    df_previous['_composite_key'] = _build_composite_key(df_previous, key_cols)
+    
+    # Check for empty keys
+    if (df_current['_composite_key'] == '').any():
+        raise ValueError("Empty composite keys found in current file")
+    if (df_previous['_composite_key'] == '').any():
+        raise ValueError("Empty composite keys found in previous file")
+    
+    # Check for duplicates
+    if df_current['_composite_key'].duplicated().any():
+        raise ValueError("Duplicate composite keys found in current file")
+    if df_previous['_composite_key'].duplicated().any():
+        raise ValueError("Duplicate composite keys found in previous file")
+    
+    current_map = df_current.set_index('_composite_key', drop=False)
+    previous_map = df_previous.set_index('_composite_key', drop=False)
+    
+    current_keys = set(current_map.index.tolist())
+    previous_keys = set(previous_map.index.tolist())
+    
+    added_keys = sorted(list(current_keys - previous_keys))
+    deleted_keys = sorted(list(previous_keys - current_keys))
+    common_keys = sorted(list(current_keys & previous_keys))
+    
+    changes = []
+    
+    # Added records
+    for key in added_keys:
+        row = current_map.loc[key]
+        changes.append({
+            'Change Type': 'Added',
+            'Composite Key': key,
+            **{col: row.get(col, '') for col in key_cols},
+            'Changed Fields': 'All (new record)',
+            'Details': 'Record added in current file'
+        })
+    
+    # Deleted records
+    for key in deleted_keys:
+        row = previous_map.loc[key]
+        changes.append({
+            'Change Type': 'Deleted',
+            'Composite Key': key,
+            **{col: row.get(col, '') for col in key_cols},
+            'Changed Fields': 'All (deleted record)',
+            'Details': 'Record removed from current file'
+        })
+    
+    # Modified records
+    for key in common_keys:
+        row_current = current_map.loc[key]
+        row_previous = previous_map.loc[key]
+        
+        changed_fields = []
+        field_details = []
+        
+        for col in compare_cols:
+            if col in key_cols:
+                continue  # Skip key columns
+            
+            val_current = row_current.get(col, None)
+            val_previous = row_previous.get(col, None)
+            
+            if not values_equal(val_current, val_previous):
+                changed_fields.append(col)
+                old_val = val_previous if pd.notna(val_previous) else ''
+                new_val = val_current if pd.notna(val_current) else ''
+                field_details.append(f"{col}: '{old_val}' → '{new_val}'")
+        
+        if changed_fields:
+            changes.append({
+                'Change Type': 'Modified',
+                'Composite Key': key,
+                **{col: row_current.get(col, '') for col in key_cols},
+                'Changed Fields': ', '.join(changed_fields),
+                'Details': ' | '.join(field_details)
+            })
+    
+    return pd.DataFrame(changes)
+
+
+def run_financial_comparison(
+    df_current: pd.DataFrame,
+    df_previous: pd.DataFrame,
+    key_cols: List[str]
+) -> pd.DataFrame:
+    """
+    Analysis 3: Financial Comparison
+    
+    Compares Total Operating Income between current and previous files.
+    
+    Args:
+        df_current: Current period DataFrame
+        df_previous: Previous period DataFrame
+        key_cols: List of key column names
+    
+    Returns:
+        DataFrame with TOI Status column
+    """
+    df_current = df_current.copy()
+    df_previous = df_previous.copy()
+    
+    df_current['_composite_key'] = _build_composite_key(df_current, key_cols)
+    df_previous['_composite_key'] = _build_composite_key(df_previous, key_cols)
+    
+    current_map = df_current.set_index('_composite_key', drop=False)
+    previous_map = df_previous.set_index('_composite_key', drop=False)
+    
+    toi_col = 'Total Operating Income (HORIS YTD Financials)'
+    
+    results = []
+    
+    # Process all keys from both files
+    all_keys = set(current_map.index.tolist()) | set(previous_map.index.tolist())
+    
+    for key in sorted(all_keys):
+        in_current = key in current_map.index
+        in_previous = key in previous_map.index
+        
+        if in_current and in_previous:
+            row_current = current_map.loc[key]
+            row_previous = previous_map.loc[key]
+            
+            toi_current = pd.to_numeric(row_current.get(toi_col, 0), errors='coerce')
+            toi_previous = pd.to_numeric(row_previous.get(toi_col, 0), errors='coerce')
+            
+            # Handle NaN values
+            toi_current = 0 if pd.isna(toi_current) else toi_current
+            toi_previous = 0 if pd.isna(toi_previous) else toi_previous
+            
+            if toi_current > toi_previous:
+                status = 'Increased'
+            elif toi_current < toi_previous:
+                status = 'Decreased'
+            else:
+                status = 'No Change'
+            
+            results.append({
+                'Composite Key': key,
+                **{col: row_current.get(col, '') for col in key_cols},
+                'TOI Previous': toi_previous,
+                'TOI Current': toi_current,
+                'TOI Difference': toi_current - toi_previous,
+                'TOI Status': status
+            })
+        elif in_current:
+            row_current = current_map.loc[key]
+            toi_current = pd.to_numeric(row_current.get(toi_col, 0), errors='coerce')
+            toi_current = 0 if pd.isna(toi_current) else toi_current
+            
+            results.append({
+                'Composite Key': key,
+                **{col: row_current.get(col, '') for col in key_cols},
+                'TOI Previous': 0,
+                'TOI Current': toi_current,
+                'TOI Difference': toi_current,
+                'TOI Status': 'New Record'
+            })
+        else:  # in_previous only
+            row_previous = previous_map.loc[key]
+            toi_previous = pd.to_numeric(row_previous.get(toi_col, 0), errors='coerce')
+            toi_previous = 0 if pd.isna(toi_previous) else toi_previous
+            
+            results.append({
+                'Composite Key': key,
+                **{col: row_previous.get(col, '') for col in key_cols},
+                'TOI Previous': toi_previous,
+                'TOI Current': 0,
+                'TOI Difference': -toi_previous,
+                'TOI Status': 'Deleted Record'
+            })
+    
+    return pd.DataFrame(results)
+
+
+def build_consolidated(
+    df_mastergroup: pd.DataFrame,
+    df_nonfinancial: pd.DataFrame,
+    df_financial: pd.DataFrame,
+    key_cols: List[str]
+) -> pd.DataFrame:
+    """
+    Build consolidated report merging all three analyses.
+    
+    Args:
+        df_mastergroup: Result from run_mastergroup_validation
+        df_nonfinancial: Result from run_non_financial_comparison
+        df_financial: Result from run_financial_comparison
+        key_cols: List of key column names
+    
+    Returns:
+        Consolidated DataFrame with all statuses
+    """
+    # Build composite keys for all dataframes
+    df_mg = df_mastergroup.copy()
+    df_mg['_composite_key'] = _build_composite_key(df_mg, key_cols)
+    
+    # For non-financial, composite key already exists
+    df_nf = df_nonfinancial.copy()
+    if 'Composite Key' in df_nf.columns:
+        df_nf = df_nf.rename(columns={'Composite Key': '_composite_key'})
+    
+    # For financial, composite key already exists
+    df_fin = df_financial.copy()
+    if 'Composite Key' in df_fin.columns:
+        df_fin = df_fin.rename(columns={'Composite Key': '_composite_key'})
+    
+    # Start with mastergroup validation (has all current records)
+    consolidated = df_mg.set_index('_composite_key')
+    
+    # Merge non-financial changes
+    nf_status = df_nf.set_index('_composite_key')[['Change Type']] if not df_nf.empty else pd.DataFrame()
+    if not nf_status.empty:
+        consolidated = consolidated.join(nf_status, how='left')
+    else:
+        consolidated['Change Type'] = 'No Change'
+    
+    # Fill NaN in Change Type with 'No Change'
+    consolidated['Change Type'] = consolidated['Change Type'].fillna('No Change')
+    
+    # Merge financial comparison
+    fin_cols = ['TOI Status', 'TOI Previous', 'TOI Current', 'TOI Difference']
+    fin_status = df_fin.set_index('_composite_key')[fin_cols] if not df_fin.empty else pd.DataFrame()
+    if not fin_status.empty:
+        consolidated = consolidated.join(fin_status, how='left')
+    else:
+        for col in fin_cols:
+            consolidated[col] = 'N/A' if col == 'TOI Status' else 0
+    
+    # Fill NaN in TOI Status
+    consolidated['TOI Status'] = consolidated['TOI Status'].fillna('N/A')
+    
+    # Reset index to get composite key as column
+    consolidated = consolidated.reset_index()
+    
+    # Reorder columns for better readability
+    key_columns = key_cols + ['Match Status', 'Fuzzy Score', 'Change Type', 'TOI Status', 
+                               'TOI Previous', 'TOI Current', 'TOI Difference']
+    other_columns = [col for col in consolidated.columns if col not in key_columns and col != '_composite_key']
+    
+    final_columns = key_columns + other_columns
+    final_columns = [col for col in final_columns if col in consolidated.columns]
+    
+    return consolidated[final_columns]
