@@ -663,11 +663,14 @@ def financial_tab_layout():
                                                         ),
                                                         dbc.Col(
                                                             md=9,
-                                                            children=dbc.Alert(
-                                                                id="fin_analysis_status",
-                                                                color="secondary",
-                                                                className="py-2 mb-0",
-                                                                children="Click 'Run Analysis' to start."
+                                                            children=dcc.Loading(
+                                                                type="default",
+                                                                children=dbc.Alert(
+                                                                    id="fin_analysis_status",
+                                                                    color="secondary",
+                                                                    className="py-2 mb-0",
+                                                                    children="Click 'Run Analysis' to start."
+                                                                )
                                                             )
                                                         )
                                                     ]
@@ -712,7 +715,10 @@ def financial_tab_layout():
                                                         dcc.Tab(label="Consolidated Report", value="tab_consolidated")
                                                     ]
                                                 ),
-                                                html.Div(id="fin_results_content", className="mt-3"),
+                                                dcc.Loading(
+                                                    type="default",
+                                                    children=html.Div(id="fin_results_content", className="mt-3")
+                                                ),
                                                 html.Div(className="mt-3"),
                                                 dbc.Row(
                                                     className="g-2 align-items-center",
