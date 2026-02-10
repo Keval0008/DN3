@@ -17,7 +17,8 @@ from services.report_writer import write_anomaly_report_xlsx
 from utils.constants import (FINANCIAL_KEY_COLUMNS, FINANCIAL_NON_FINANCIAL_COLUMNS, 
                              FINANCIAL_FUZZY_THRESHOLD, FINANCIAL_EXPECTED_COLUMNS)
 from services.financial_engine import (run_mastergroup_validation, run_non_financial_comparison,
-                                      run_financial_comparison, build_consolidated, _read_financial_file)
+                                      run_financial_comparison, build_consolidated, _read_financial_file,
+                                      validate_financial_files)
 from services.financial_report_writer import write_financial_report_xlsx
 
 app = dash.Dash(__name__,title=APP_TITLE, external_stylesheets=[dbc.themes.FLATLY],suppress_callback_exceptions=True)
@@ -467,6 +468,7 @@ def financial_tab_layout():
             dcc.Store(id="fin_meta_store", storage_type="memory"),
             dcc.Store(id="fin_results_store", storage_type="memory"),
             dcc.Store(id="fin_report_path_store", storage_type="memory"),
+            dcc.Store(id="fin_validation_store", storage_type="memory"),
             
             # Clear session button
             dbc.Row(
@@ -585,6 +587,19 @@ def financial_tab_layout():
                                             color="info",
                                             className="py-2 mb-0",
                                             children="Upload files and select current/previous to continue."
+                                        ),
+                                        html.Div(className="mt-3"),
+                                        dbc.Button(
+                                            "Validate Data",
+                                            id="fin_validate_btn",
+                                            color="info",
+                                            className="w-100",
+                                            disabled=True
+                                        ),
+                                        html.Div(className="mt-3"),
+                                        dcc.Loading(
+                                            type="default",
+                                            children=html.Div(id="fin_validation_preview")
                                         )
                                     ]
                                 )
@@ -1399,6 +1414,7 @@ def fin_handle_upload(contents_list, filename_list, clear_clicks, session_data, 
     Output("fin_selection_status", "children"),
     Output("fin_selection_status", "color"),
     Output("fin_meta_store", "data"),
+    Output("fin_validate_btn", "disabled"),
     Input("fin_current_dropdown", "value"),
     Input("fin_previous_dropdown", "value"),
     prevent_initial_call=True
@@ -1411,22 +1427,131 @@ def fin_toggle_comparison_section(current_id, previous_id):
                 {"display": "none"},
                 "❌ Error: Current and Previous files must be different.",
                 "danger",
-                None
+                None,
+                True  # Keep validate button disabled
             )
         
         return (
-            {"display": "block"},
-            "✅ Files selected. Configure settings and run analysis below.",
+            {"display": "none"},  # Keep hidden until validation passes
+            "✅ Files selected. Click 'Validate Data' to preview.",
             "success",
-            {"current_file_id": current_id, "previous_file_id": previous_id}
+            {"current_file_id": current_id, "previous_file_id": previous_id},
+            False  # Enable validate button
         )
     
     return (
         {"display": "none"},
         "Select both current and previous files to continue.",
         "info",
-        None
+        None,
+        True  # Keep validate button disabled
     )
+
+
+@app.callback(
+    Output("fin_validation_store", "data"),
+    Output("fin_validation_preview", "children"),
+    Output("fin_comparison_section", "style", allow_duplicate=True),
+    Input("fin_validate_btn", "n_clicks"),
+    State("fin_files_store", "data"),
+    State("fin_meta_store", "data"),
+    prevent_initial_call=True
+)
+def fin_validate_data(n_clicks, files_store, meta_store):
+    """Validate data and show preview with duplicate information"""
+    if not files_store or not meta_store:
+        return None, None, {"display": "none"}
+    
+    current_id = meta_store.get("current_file_id")
+    previous_id = meta_store.get("previous_file_id")
+    
+    if not current_id or not previous_id:
+        return None, None, {"display": "none"}
+    
+    # Get file paths
+    files_by_id = {f["file_id"]: f for f in files_store}
+    current_file = files_by_id.get(current_id)
+    previous_file = files_by_id.get(previous_id)
+    
+    if not current_file or not previous_file:
+        return None, dbc.Alert("Error: File not found.", color="danger"), {"display": "none"}
+    
+    try:
+        # Run validation
+        validation_stats = validate_financial_files(
+            current_file["path"],
+            previous_file["path"],
+            FINANCIAL_KEY_COLUMNS
+        )
+        
+        # Build preview UI
+        preview_content = dbc.Card([
+            dbc.CardHeader(html.H5("📊 Data Validation Preview", className="mb-0")),
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col([
+                        html.H6("Current File", className="text-primary"),
+                        html.P([
+                            html.Strong("Total Rows: "), f"{validation_stats['current_total_rows']:,}", html.Br(),
+                            html.Strong("Unique Keys: "), f"{validation_stats['current_unique_keys']:,}", html.Br(),
+                            html.Strong("Duplicate Rows: "), 
+                            html.Span(
+                                f"{validation_stats['current_duplicate_rows']:,}",
+                                className="text-danger fw-bold" if validation_stats['current_duplicate_rows'] > 0 else ""
+                            )
+                        ], className="mb-0")
+                    ], md=6),
+                    dbc.Col([
+                        html.H6("Previous File", className="text-secondary"),
+                        html.P([
+                            html.Strong("Total Rows: "), f"{validation_stats['previous_total_rows']:,}", html.Br(),
+                            html.Strong("Unique Keys: "), f"{validation_stats['previous_unique_keys']:,}", html.Br(),
+                            html.Strong("Duplicate Rows: "), 
+                            html.Span(
+                                f"{validation_stats['previous_duplicate_rows']:,}",
+                                className="text-danger fw-bold" if validation_stats['previous_duplicate_rows'] > 0 else ""
+                            )
+                        ], className="mb-0")
+                    ], md=6)
+                ]),
+                
+                # Show duplicate samples if any
+                html.Div([
+                    html.Hr(),
+                    dbc.Alert([
+                        html.H6("⚠️ Duplicates Detected", className="alert-heading"),
+                        html.P("The following duplicate keys will be automatically removed (keeping first occurrence):", className="mb-2"),
+                        html.Div([
+                            html.Strong("Current File Samples:"),
+                            html.Ul([html.Li(key) for key in validation_stats['current_duplicate_samples']]) if validation_stats['current_duplicate_samples'] else html.P("None", className="text-muted ms-3")
+                        ]) if validation_stats['current_duplicate_rows'] > 0 else None,
+                        html.Div([
+                            html.Strong("Previous File Samples:"),
+                            html.Ul([html.Li(key) for key in validation_stats['previous_duplicate_samples']]) if validation_stats['previous_duplicate_samples'] else html.P("None", className="text-muted ms-3")
+                        ]) if validation_stats['previous_duplicate_rows'] > 0 else None
+                    ], color="warning")
+                ]) if validation_stats['has_duplicates'] else None,
+                
+                dbc.Alert([
+                    html.I(className="bi bi-check-circle me-2"),
+                    "Validation passed! You can now proceed to run the analysis."
+                ], color="success", className="mb-0 mt-3")
+            ])
+        ], className="shadow-sm")
+        
+        return (
+            validation_stats,
+            preview_content,
+            {"display": "block"}  # Show comparison section
+        )
+        
+    except Exception as e:
+        error_preview = dbc.Alert([
+            html.H6("❌ Validation Failed", className="alert-heading"),
+            html.P(str(e))
+        ], color="danger")
+        
+        return None, error_preview, {"display": "none"}
 
 
 @app.callback(
