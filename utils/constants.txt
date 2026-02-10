@@ -9,3 +9,28 @@ HEADER_SCAN_COLS_MAX = 35
 HEADER_SCAN_ROWS_MAX = 80
 
 KEY_COLUMN = "Mastergroup Name"
+
+# Financial Tab constants
+FINANCIAL_EXPECTED_COLUMNS = [
+    "Site Customer Number", "Site Customer Name", "Deactivated Customer",
+    "GID", "GID Name", "Mastergroup Name",
+    "Total Operating Income (HORIS YTD Financials)",
+    "Total Operating Income (HORIS YTD Financials Prior Year This month)",
+    "Site Name", "Booking Country Name", "Managing Country",
+    "Business Area", "RRM Name", "RRM Location", "RRM Country",
+]
+
+FINANCIAL_KEY_COLUMNS = ["Site Customer Number", "Site Customer Name"]
+
+FINANCIAL_FINANCIAL_COLUMNS = [
+    "Total Operating Income (HORIS YTD Financials)",
+    "Total Operating Income (HORIS YTD Financials Prior Year This month)",
+]
+
+FINANCIAL_NON_FINANCIAL_COLUMNS = [
+    "Deactivated Customer", "GID", "GID Name", "Mastergroup Name",
+    "Site Name", "Booking Country Name", "Managing Country",
+    "Business Area", "RRM Name", "RRM Location", "RRM Country",
+]
+
+FINANCIAL_FUZZY_THRESHOLD = 70
