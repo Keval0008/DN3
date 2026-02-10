@@ -261,6 +261,7 @@ def reference_tab_layout():
                                             ])
                                         ),
                                         dbc.CardBody(
+                                            className="p-4",
                                             children=[
                                                 dbc.Row(className="g-3",
                                                     children=[
@@ -294,6 +295,7 @@ def reference_tab_layout():
                                         ),
                                         html.Hr(className="my-3"),
                                         dbc.Accordion(
+                                            className="pt-3",
                                             start_collapsed=True,
                                             children=[
                                                 dbc.AccordionItem(
@@ -653,8 +655,6 @@ def handle_upload(contents_list, filename_list, clear_clicks, session_data, exis
                 "run_date": f["run_date_display"] if f["run_date_display"] else "",
                 "latest_mastergroup_date": f.get("latest_date", ""),
                 "date_status": date_status,
-                "status": status,
-                "valid": "Yes" if f["valid"] else "No",
                 }
                 )
 
@@ -665,8 +665,6 @@ def handle_upload(contents_list, filename_list, clear_clicks, session_data, exis
             {"name": "Run date (parsed)", "id": "run_date"},
             {"name": "Latest date (in file)", "id": "latest_mastergroup_date"},
             {"name": "Date Check Status", "id": "date_status"},
-            {"name": "Status", "id": "status"},
-            {"name": "Valid run date", "id": "valid"},
         ],
         data=table_rows,
         style_cell={"padding": "8px", "fontSize": "13px"},
@@ -811,7 +809,7 @@ def run_comparison(n_clicks,session_data,files_store,meta_store,ref_file_id,comp
     except Exception as e:
         return (
             no_update, no_update, no_update, no_update,
-            "Run comparison first to generate a report.", "secondary",
+            f"Error detecting header row: {str(e)}", "danger",
             no_update, no_update, no_update,
             )
 
@@ -830,7 +828,7 @@ def run_comparison(n_clicks,session_data,files_store,meta_store,ref_file_id,comp
             ref_run_date=ref.get("run_date_iso"),)
     except Exception as e:
         return (no_update, no_update, no_update, no_update,
-                "Run comparison first to generate a report.", "secondary",
+                f"Error running comparison: {str(e)}", "danger",
                 no_update, no_update, no_update,
         )
 
