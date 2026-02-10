@@ -1,0 +1,239 @@
+from typing import Dict, List, Optional, Any
+import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils.dataframe import dataframe_to_rows
+
+# Color fills
+FILL_MATCHED = PatternFill("solid", fgColor="C6EFCE")  # Green
+FILL_NOT_MATCHED = PatternFill("solid", fgColor="FFC7CE")  # Red
+FILL_ADDED = PatternFill("solid", fgColor="C6EFCE")  # Green
+FILL_DELETED = PatternFill("solid", fgColor="FFC7CE")  # Red
+FILL_MODIFIED = PatternFill("solid", fgColor="FFEB9C")  # Yellow
+FILL_INCREASED = PatternFill("solid", fgColor="C6EFCE")  # Green
+FILL_DECREASED = PatternFill("solid", fgColor="FFC7CE")  # Red
+FILL_NO_CHANGE = PatternFill("solid", fgColor="E7E6E6")  # Gray
+
+HEADER_FONT = Font(bold=True)
+CENTER = Alignment(horizontal="center", vertical="center")
+
+
+def write_financial_report_xlsx(
+    path: str,
+    df_mastergroup: pd.DataFrame,
+    df_nonfinancial: pd.DataFrame,
+    df_financial: pd.DataFrame,
+    df_consolidated: pd.DataFrame
+) -> None:
+    """
+    Write 4-sheet financial analysis report.
+    
+    Args:
+        path: Output file path
+        df_mastergroup: Mastergroup validation results
+        df_nonfinancial: Non-financial comparison results
+        df_financial: Financial comparison results
+        df_consolidated: Consolidated report
+    """
+    wb = Workbook()
+    
+    # Remove default sheet
+    if 'Sheet' in wb.sheetnames:
+        wb.remove(wb['Sheet'])
+    
+    # Sheet 1: Mastergroup Mapping
+    _write_mastergroup_sheet(wb, df_mastergroup)
+    
+    # Sheet 2: Non-Financial Changes
+    _write_nonfinancial_sheet(wb, df_nonfinancial)
+    
+    # Sheet 3: Financial Comparison
+    _write_financial_sheet(wb, df_financial)
+    
+    # Sheet 4: Consolidated Report
+    _write_consolidated_sheet(wb, df_consolidated)
+    
+    wb.save(path)
+
+
+def _write_mastergroup_sheet(wb: Workbook, df: pd.DataFrame) -> None:
+    """Write Sheet 1: Mastergroup Mapping Output"""
+    ws = wb.create_sheet(title="Mastergroup Mapping")
+    
+    if df.empty:
+        ws.append(["No data available"])
+        ws["A1"].font = HEADER_FONT
+        return
+    
+    # Write headers and data
+    for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=True), 1):
+        ws.append(row)
+        
+        if r_idx == 1:
+            # Style headers
+            for c_idx in range(1, len(row) + 1):
+                cell = ws.cell(row=r_idx, column=c_idx)
+                cell.font = HEADER_FONT
+                cell.alignment = CENTER
+        else:
+            # Apply conditional formatting based on Match Status
+            match_status_col = None
+            for c_idx, col_name in enumerate(df.columns, 1):
+                if col_name == 'Match Status':
+                    match_status_col = c_idx
+                    break
+            
+            if match_status_col:
+                match_status = ws.cell(row=r_idx, column=match_status_col).value
+                fill = FILL_MATCHED if match_status == 'Matched' else FILL_NOT_MATCHED
+                
+                # Apply fill to entire row
+                for c_idx in range(1, len(row) + 1):
+                    ws.cell(row=r_idx, column=c_idx).fill = fill
+    
+    # Auto-adjust column widths
+    _auto_adjust_columns(ws, df)
+
+
+def _write_nonfinancial_sheet(wb: Workbook, df: pd.DataFrame) -> None:
+    """Write Sheet 2: Non-Financial Change Output"""
+    ws = wb.create_sheet(title="Non-Financial Changes")
+    
+    if df.empty:
+        ws.append(["No changes detected"])
+        ws["A1"].font = HEADER_FONT
+        return
+    
+    # Write headers and data
+    for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=True), 1):
+        ws.append(row)
+        
+        if r_idx == 1:
+            # Style headers
+            for c_idx in range(1, len(row) + 1):
+                cell = ws.cell(row=r_idx, column=c_idx)
+                cell.font = HEADER_FONT
+                cell.alignment = CENTER
+        else:
+            # Apply conditional formatting based on Change Type
+            change_type_col = None
+            for c_idx, col_name in enumerate(df.columns, 1):
+                if col_name == 'Change Type':
+                    change_type_col = c_idx
+                    break
+            
+            if change_type_col:
+                change_type = ws.cell(row=r_idx, column=change_type_col).value
+                
+                if change_type == 'Added':
+                    fill = FILL_ADDED
+                elif change_type == 'Deleted':
+                    fill = FILL_DELETED
+                elif change_type == 'Modified':
+                    fill = FILL_MODIFIED
+                else:
+                    fill = None
+                
+                if fill:
+                    for c_idx in range(1, len(row) + 1):
+                        ws.cell(row=r_idx, column=c_idx).fill = fill
+    
+    # Auto-adjust column widths
+    _auto_adjust_columns(ws, df)
+
+
+def _write_financial_sheet(wb: Workbook, df: pd.DataFrame) -> None:
+    """Write Sheet 3: Financial Comparison Output"""
+    ws = wb.create_sheet(title="Financial Comparison")
+    
+    if df.empty:
+        ws.append(["No data available"])
+        ws["A1"].font = HEADER_FONT
+        return
+    
+    # Write headers and data
+    for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=True), 1):
+        ws.append(row)
+        
+        if r_idx == 1:
+            # Style headers
+            for c_idx in range(1, len(row) + 1):
+                cell = ws.cell(row=r_idx, column=c_idx)
+                cell.font = HEADER_FONT
+                cell.alignment = CENTER
+        else:
+            # Apply conditional formatting based on TOI Status
+            toi_status_col = None
+            for c_idx, col_name in enumerate(df.columns, 1):
+                if col_name == 'TOI Status':
+                    toi_status_col = c_idx
+                    break
+            
+            if toi_status_col:
+                toi_status = ws.cell(row=r_idx, column=toi_status_col).value
+                
+                if toi_status == 'Increased':
+                    fill = FILL_INCREASED
+                elif toi_status == 'Decreased':
+                    fill = FILL_DECREASED
+                elif toi_status == 'No Change':
+                    fill = FILL_NO_CHANGE
+                else:
+                    fill = None
+                
+                if fill:
+                    for c_idx in range(1, len(row) + 1):
+                        ws.cell(row=r_idx, column=c_idx).fill = fill
+    
+    # Auto-adjust column widths
+    _auto_adjust_columns(ws, df)
+
+
+def _write_consolidated_sheet(wb: Workbook, df: pd.DataFrame) -> None:
+    """Write Sheet 4: Consolidated Report"""
+    ws = wb.create_sheet(title="Consolidated Report")
+    
+    if df.empty:
+        ws.append(["No data available"])
+        ws["A1"].font = HEADER_FONT
+        return
+    
+    # Write headers and data
+    for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=True), 1):
+        ws.append(row)
+        
+        if r_idx == 1:
+            # Style headers
+            for c_idx in range(1, len(row) + 1):
+                cell = ws.cell(row=r_idx, column=c_idx)
+                cell.font = HEADER_FONT
+                cell.alignment = CENTER
+        else:
+            # No row-level coloring for consolidated - too many statuses
+            # Just ensure proper alignment
+            for c_idx in range(1, len(row) + 1):
+                ws.cell(row=r_idx, column=c_idx).alignment = Alignment(vertical="top", wrap_text=True)
+    
+    # Auto-adjust column widths
+    _auto_adjust_columns(ws, df)
+
+
+def _auto_adjust_columns(ws, df: pd.DataFrame, max_width: int = 50) -> None:
+    """Auto-adjust column widths based on content."""
+    for idx, col in enumerate(df.columns, 1):
+        # Get max length in column
+        max_length = len(str(col))  # Header length
+        
+        # Sample first 100 rows for performance
+        sample_size = min(100, len(df))
+        for val in df[col].head(sample_size):
+            try:
+                val_length = len(str(val))
+                if val_length > max_length:
+                    max_length = val_length
+            except:
+                pass
+        
+        # Set width with limits
+        adjusted_width = min(max_length + 2, max_width)
+        ws.column_dimensions[ws.cell(row=1, column=idx).column_letter].width = adjusted_width
