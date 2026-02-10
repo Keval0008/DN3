@@ -2,6 +2,8 @@ from fileinput import filename
 import os
 import uuid
 from datetime import datetime
+import webbrowser
+import threading
 import dash
 from dash import dcc, html, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
@@ -783,7 +785,22 @@ app.layout = dbc.Container(
                     children=[
                         html.H1(APP_TITLE, className="mb-0"),
                         html.Div("Upload, detect current run, compare with a reference run.", className="text-muted")
-                    ]
+                    ],
+                    md=8
+                ),
+                dbc.Col(
+                    children=[
+                        html.Div(
+                            "Developed by: Analytics Avengers Team",
+                            className="text-end fw-semibold",
+                            style={
+                                "color": "#0d6efd",
+                                "fontSize": "14px",
+                                "marginTop": "10px"
+                            }
+                        )
+                    ],
+                    md=4
                 )
             ]
         ),
@@ -1798,5 +1815,16 @@ def fin_download_report(n_clicks, report_path_store):
     return dcc.send_file(path), f"Downloading: {os.path.basename(path)}", "success"
 
 
+
 if __name__ == "__main__":
-    app.run_server (debug=True)
+    # Function to open browser after a short delay
+    def open_browser():
+        webbrowser.open_new("http://127.0.0.1:8050/")
+    
+    # Start browser in a separate thread after 1.5 seconds
+    timer = threading.Timer(1.5, open_browser)
+    timer.daemon = True
+    timer.start()
+    
+    # Run the Dash server
+    app.run_server(debug=True)
