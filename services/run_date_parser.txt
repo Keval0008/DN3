@@ -1,0 +1,47 @@
+import re
+from datetime import datetime
+from typing import Optional, Dict
+import openpyxl
+
+RUN_DATE_REGEX = re.compile(
+    r"\b(?P<dow>Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+"
+    r"(?P<mon>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
+    r"(?P<day>\d{1,2})\s+"
+    r"(?P<time>\d{2}:\d{2}:\d{2})\s+"
+    r"(?P<tz>[A-Za-z]{2,5})\s+"
+    r"(?P<year>\d{4})\b"
+)
+
+def _parse_run_date(match: re.Match) -> Optional[datetime]:
+    dow = match.group("dow")
+    mon = match.group("mon")
+    day = match.group("day")
+    time = match.group("time")
+    tz = match.group("tz")
+    year = match.group("year")
+    
+    text = f"{dow} {mon} {day} {time} {year}"
+    return datetime.strptime(text, "%a %b %d %H:%M:%S %Y")
+
+def extract_run_date_from_xlsx(path: str, sheet_name: Optional[str] = None) -> Dict:
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb[wb.sheetnames[0]]
+
+    row1 = []
+
+    for cell in ws[1]:
+        row1.append(str(cell.value) if cell.value is not None else "")
+
+    joined = " | ".join(row1)
+    m = RUN_DATE_REGEX.search(joined)
+    if not m:
+        return {"valid":False, "run_date_raw": None, "run_date_parsed": None}
+    
+    raw = m.group(0)
+    try:
+        dt = _parse_run_date(m)
+    except Exception:
+        return {"valid":False, "run_date_raw": raw, "run_date_parsed": None}
+    
+    return {"valid":True, "run_date_raw": raw, "run_date_parsed": dt}
+

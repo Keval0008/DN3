@@ -1,0 +1,125 @@
+from typing import Dict, List, Optional, Any
+import pandas as pd
+from utils.normalize import norm_key, values_equal, norm_col
+
+def _read_table(path: str, header_row_1based: int) -> pd.DataFrame:
+    header_idx = header_row_1based - 1
+    df = pd.read_excel(path, header=header_idx, engine='openpyxl')
+    df = df.loc[:,~df.columns.to_series().apply(lambda x: str(x).startswith('Unnamed'))]
+    df.columns = [norm_col(col) for col in df.columns]
+    return df
+
+def run_reference_check(
+        main_path: str,
+        ref_path: str,
+        key_column: str,
+        compare_columns: List[str],
+        main_header_row: int = 1,
+        ref_header_row: int = 1,
+        main_run_date: Optional[str] = None,
+        ref_run_date: Optional[str] = None,
+        main_filename: Optional[str] = None,
+        ref_filename: Optional[str] = None
+) -> Dict[str, Any]:
+    df_main = _read_table(main_path, main_header_row)
+    df_ref = _read_table(ref_path, ref_header_row)
+
+    key_column = norm_col(key_column)
+    compare_columns = [norm_col(col) for col in compare_columns if norm_col(col)]
+    compare_columns = [col for col in compare_columns if col != key_column]
+
+    if key_column not in df_main.columns:
+        raise ValueError(f"Key column '{key_column}' not found in main table.")
+    if key_column not in df_ref.columns:
+        raise ValueError(f"Key column '{key_column}' not found in reference table.")
+    
+    missing_main = [c for c in compare_columns if c not in df_main.columns]
+    missing_ref = [c for c in compare_columns if c not in df_ref.columns]
+    existing_compare = [c for c in compare_columns if c in df_main.columns and c in df_ref.columns]
+
+    if not existing_compare:
+        raise ValueError("No valid compare columns found in both tables.")
+    
+    df_main[key_column] = df_main[key_column].apply(norm_key)
+    df_ref[key_column] = df_ref[key_column].apply(norm_key)
+
+    if (df_main[key_column] == "").any():
+        raise ValueError("Empty keys found in main table after normalization.")
+    if (df_ref[key_column] == "").any():
+        raise ValueError("Empty keys found in reference table after normalization.")
+    
+    if df_main[key_column].duplicated().any():
+        dup = df_main[df_main[key_column].duplicated(keep=False)][key_column].unique()
+        raise ValueError(f"Duplicate keys found in main table after normalization: {dup}")
+    if df_ref[key_column].duplicated().any():
+        dup = df_ref[df_ref[key_column].duplicated(keep=False)][key_column].unique()
+        raise ValueError(f"Duplicate keys found in reference table after normalization: {dup}")
+    
+    main_map = df_main.set_index(key_column,drop=False)
+    ref_map = df_ref.set_index(key_column,drop=False)
+
+    main_keys = set(main_map.index.tolist())
+    ref_keys = set(ref_map.index.tolist())
+
+    added_keys = sorted(list(main_keys - ref_keys))
+    deleted_keys = sorted(list(ref_keys - main_keys))
+    common_keys = sorted(list(main_keys & ref_keys))
+
+    anomalies = []
+    for k in added_keys:
+        anomalies.append({
+            "change_type": "ADDED",
+            "key": k,
+            "column_name": "",
+            "old_value": "",
+            "new_value": "(new row)",
+        })
+
+    for k in deleted_keys:
+        anomalies.append({
+            "change_type": "DELETED",
+            "key": k,
+            "column_name": "",
+            "old_value": "(deleted row)",
+            "new_value": "",
+        })
+
+    modified_rows = 0
+    modified_cells = 0
+    for k in common_keys:
+        row_main = main_map.loc[k]
+        row_ref = ref_map.loc[k]
+
+        row_changed = False
+        for col in existing_compare:
+            a = row_ref.get(col, None)
+            b = row_main.get(col, None)
+            if not values_equal(a, b):
+                modified_cells += 1
+                row_changed = True
+                anomalies.append({
+                    "change_type": "MODIFIED",
+                    "key": k,
+                    "column_name": col,
+                    "old_value": a if pd.notna(a) else "",
+                    "new_value": b if pd.notna(b) else "",
+                })
+        if row_changed:
+            modified_rows += 1
+
+    anomalies_df = pd.DataFrame(anomalies, columns=["change_type", "key", "column_name", "old_value", "new_value"])
+
+    summary = {
+        "main_file": main_filename if main_filename else main_path,
+        "ref_file": ref_filename if ref_filename else ref_path,
+        "key_column": key_column,
+        "compared_columns": existing_compare,
+        "added_rows": len(added_keys),
+        "deleted_rows": len(deleted_keys),
+        "modified_rows": modified_rows,
+    }
+
+    return {
+        "summary": summary,
+        "anomalies_df": anomalies_df,
+    }

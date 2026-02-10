@@ -1,0 +1,72 @@
+import os
+import base64
+import pandas as pd
+from datetime import datetime
+
+BASE_DIR = "/tmp/data_check_tool"
+
+def ensure_session_dir(session_id):
+    session_dir = os.path.join(BASE_DIR, session_id)
+    os.makedirs(session_dir, exist_ok=True)
+    return session_dir
+
+def cleanup_session_dir(session_id):
+    session_dir = os.path.join(BASE_DIR, session_id)
+    if not os.path.exists(session_dir):
+        return
+    
+    for root, _, files in os.walk(session_dir):
+        for file in files:
+            try:
+                os.remove(os.path.join(root, file))
+            except Exception as e:
+                print(f"Error removing file {file}: {e}")
+    try:
+        os.rmdir(session_dir)
+    except Exception as e:
+        print(f"Error removing session directory {session_dir}: {e}")
+
+def save_uploaded_xlsx(session_id, file_id, filename, contents_b64):
+    session_dir = ensure_session_dir(session_id)
+    safe_name = filename.replace(" ", "_").replace("/", "_").replace("\\", "_")
+    out_path = os.path.join(session_dir, f"{file_id}_{safe_name}")
+    
+    header, b64data = contents_b64.split(",", 1)
+    data = base64.b64decode(b64data)
+
+    try:
+        with open(out_path, "wb") as f:
+            f.write(data)
+        return out_path
+    except Exception as e:
+        print(f"Error saving file {filename}: {e}")
+        return None
+    
+
+def extract_latest_mastergroup_date(path, header_row_1based=None):
+    # Auto-detect header row if not provided
+    if header_row_1based is None:
+        from services.schema_detector import detect_header_row
+        from utils.constants import EXPECTED_COLUMNS_DEFAULT, HEADER_SCAN_ROWS_MAX, HEADER_SCAN_COLS_MAX
+        try:
+            header_row_1based = detect_header_row(
+                path, EXPECTED_COLUMNS_DEFAULT,
+                max_rows=HEADER_SCAN_ROWS_MAX, max_cols=HEADER_SCAN_COLS_MAX
+            )
+        except Exception:
+            return None
+    
+    df = pd.read_excel(path, header=header_row_1based-1, engine='openpyxl')
+    date_cols = ["Date of creation", "Last amendment date", "Mastergroup Last updated date"]
+    latest_dates = []
+    for col in date_cols:
+        if col in df.columns:
+            parsed = pd.to_datetime(df[col], format="%d-%b-%Y", errors='coerce')
+            latest_dates.append(parsed)
+    
+    if not latest_dates:
+        return None
+    
+    all_dates = pd.concat(latest_dates)
+    latest = all_dates.max()
+    return latest

@@ -1,0 +1,11 @@
+APP_TITLE = "Analytics Avengers Dual checks tool"
+TAB_REFERENCE_LABEL = "Reference Data Reconciliation"
+TAB_FINANCIAL_LABEL = "Financial Data Reconciliation"
+
+EXPECTED_COLUMNS_DEFAULT = ['Mastergroup Name', 'Business Area', 'Country of Incorporation', 'Industry', 'Client Segmentation \n(GB&M Only)', 'Supergroup Name (GB&M Only)', 'Global Relationship Banker GRB Name (GB&M Only)\n', 'Global Relationship Banker- GRB Location (GB&M Only)', 'Principal Relationship Manager - PRM Name (CMB Only)', 'Principal Relationship Manager PRM Country (CMB Only) ', 'Category (CMB only)', 'De-list Master group', 'Active', 'Mastergroup Status']
+
+HEADER_SCAN_COLS_MAX = 35
+
+HEADER_SCAN_ROWS_MAX = 80
+
+KEY_COLUMN = "Mastergroup Name"
