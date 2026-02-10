@@ -262,20 +262,21 @@ def reference_tab_layout():
                                         ),
                                         dbc.CardBody(
                                             children=[
-                                                dbc.Row(
-                                                    className="g-3",
+                                                dbc.Row(className="g-3",
                                                     children=[
-                                                        dbc.Label("Key column"),
-                                                        dbc.InputGroup(
-                                                            [
-                                                                dbc.Input(value=KEY_COLUMN, disabled=False),
-                                                                dbc.InputGroupText("default"),
+                                                        dbc.Col(
+                                                            md=6,
+                                                            children=[
+                                                                dbc.Label("Key column"),
+                                                                dbc.InputGroup(
+                                                                    [
+                                                                        dbc.Input(value=KEY_COLUMN, disabled=False),
+                                                                        dbc.InputGroupText("default"),
                                                             ]
                                                         ),
                                                         dbc.FormText("Used to match rows between Current and Previous Data."),
-                                                    ],
-                                                ),
-                                                dbc.Col(
+                                                    ],),
+                                                    dbc.Col(
                                                     md=6,
                                                     children=[
                                                         dbc.Label("Compare columns (optional)"),
@@ -286,7 +287,9 @@ def reference_tab_layout():
                                                             placeholder="Leave empty to compare all inscope columns",
                                                         ),
                                                     ],
-                                                ),
+                                                ),  
+                                            ]),
+                                            
                                             ],
                                         ),
                                         html.Hr(className="my-3"),
@@ -931,7 +934,7 @@ def filter_by_card(n_added, n_deleted, n_modified, current_filter, records, diff
     return new_filter, filtered, cards, hint
 
 @app.callback(
-    Output("download_report", "data"),
+    Output("report_download", "data"),
     Output("download_hint", "children", allow_duplicate=True),
     Output("download_hint", "color", allow_duplicate=True),
     Input("download_btn", "n_clicks"),
