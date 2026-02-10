@@ -4,7 +4,7 @@ from utils.normalize import norm_key, values_equal, norm_col
 
 def _read_table(path: str, header_row_1based: int) -> pd.DataFrame:
     header_idx = header_row_1based - 1
-    df = pd.read_excel(path, header=header_idx, engine='openpyxl')
+    df = pd.read_excel(path, header=header_idx, engine='calamine')
     df = df.loc[:,~df.columns.to_series().apply(lambda x: str(x).startswith('Unnamed'))]
     df.columns = [norm_col(col) for col in df.columns]
     return df
