@@ -12,12 +12,31 @@ def _build_composite_key(df: pd.DataFrame, key_cols: List[str]) -> pd.Series:
 
 
 def _read_financial_file(path: str) -> pd.DataFrame:
-    """Read financial Excel file and normalize column names."""
-    df = pd.read_excel(path, engine='calamine')
+    """Read financial Excel file and normalize column names with auto header detection."""
+    from services.schema_detector import detect_header_row
+    from utils.constants import FINANCIAL_EXPECTED_COLUMNS
+    
+    # Auto-detect header row (search up to row 10)
+    try:
+        header_row_1based = detect_header_row(
+            path, 
+            FINANCIAL_EXPECTED_COLUMNS,
+            max_rows=10,
+            max_cols=50
+        )
+    except Exception as e:
+        # If detection fails, assume row 1
+        header_row_1based = 1
+    
+    # Read with detected header row
+    df = pd.read_excel(path, header=header_row_1based - 1, engine='calamine')
+    
     # Remove unnamed columns
     df = df.loc[:, ~df.columns.to_series().apply(lambda x: str(x).startswith('Unnamed'))]
+    
     # Normalize column names
     df.columns = [norm_col(col) for col in df.columns]
+    
     return df
 
 
