@@ -68,7 +68,7 @@ def run_reference_check(
     anomalies = []
     for k in added_keys:
         anomalies.append({
-            "change_type": "ADDED",
+            "change_type": "Added",
             "key": k,
             "column_name": "",
             "old_value": "",
@@ -77,7 +77,7 @@ def run_reference_check(
 
     for k in deleted_keys:
         anomalies.append({
-            "change_type": "DELETED",
+            "change_type": "Deleted",
             "key": k,
             "column_name": "",
             "old_value": "(deleted row)",
@@ -98,7 +98,7 @@ def run_reference_check(
                 modified_cells += 1
                 row_changed = True
                 anomalies.append({
-                    "change_type": "MODIFIED",
+                    "change_type": "Modified",
                     "key": k,
                     "column_name": col,
                     "old_value": a if pd.notna(a) else "",
