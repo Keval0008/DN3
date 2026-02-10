@@ -13,6 +13,13 @@ from services.schema_detector import detect_header_row
 from services.diff_engine import run_reference_check
 from services.report_writer import write_anomaly_report_xlsx
 
+# Financial tab imports
+from utils.constants import (FINANCIAL_KEY_COLUMNS, FINANCIAL_NON_FINANCIAL_COLUMNS, 
+                             FINANCIAL_FUZZY_THRESHOLD, FINANCIAL_EXPECTED_COLUMNS)
+from services.financial_engine import (run_mastergroup_validation, run_non_financial_comparison,
+                                      run_financial_comparison, build_consolidated, _read_financial_file)
+from services.financial_report_writer import write_financial_report_xlsx
+
 app = dash.Dash(__name__,title=APP_TITLE, external_stylesheets=[dbc.themes.FLATLY],suppress_callback_exceptions=True)
 
 server = app.server
@@ -446,12 +453,301 @@ def reference_tab_layout():
     )
 
 def financial_tab_layout():
+    """Financial Data Reconciliation tab layout"""
+    
+    compare_opts = [{"label": col, "value": col} for col in FINANCIAL_NON_FINANCIAL_COLUMNS]
+    
     return dbc.Container(
         fluid=True,
         className="py-3",
         children=[
-            html.H3("Financial Tab - Coming Soon!", className="text-center text-muted"),
-            html.Div("This section will include financial-specific checks and visualizations.", className="text-center text-muted"),
+            # Session stores
+            dcc.Store(id="fin_session_store", storage_type="memory"),
+            dcc.Store(id="fin_files_store", storage_type="memory"),
+            dcc.Store(id="fin_meta_store", storage_type="memory"),
+            dcc.Store(id="fin_results_store", storage_type="memory"),
+            dcc.Store(id="fin_report_path_store", storage_type="memory"),
+            
+            # Clear session button
+            dbc.Row(
+                className="mb-2",
+                children=[
+                    dbc.Col(
+                        md=12,
+                        children=dbc.Button(
+                            "Clear Session",
+                            id="fin_clear_session_btn",
+                            color="outline-danger",
+                            className="me-auto"
+                        )
+                    )
+                ]
+            ),
+            
+            # Upload and File Selection Row
+            dbc.Row(
+                className="g-3 align-items-stretch",
+                children=[
+                    # Upload Card
+                    dbc.Col(
+                        md=6,
+                        children=dbc.Card(
+                            className="h-100 shadow-sm",
+                            children=[
+                                dbc.CardHeader(
+                                    html.Div([
+                                        html.Span("Upload Financial Data", className="fw-semibold"),
+                                        html.Span(" - Upload exactly 2 .xlsx files (GBM or CMB)", className="text-muted small")
+                                    ])
+                                ),
+                                dbc.CardBody(
+                                    className="d-flex flex-column",
+                                    children=[
+                                        dcc.Upload(
+                                            id="fin_upload",
+                                            multiple=True,
+                                            children=html.Div([
+                                                html.I(className="bi bi-cloud-upload me-2"),
+                                                "Drag and Drop or Click to Select Files"
+                                            ]),
+                                            style={
+                                                "width": "100%",
+                                                "height": "80px",
+                                                "lineHeight": "80px",
+                                                "borderWidth": "2px",
+                                                "borderStyle": "dashed",
+                                                "borderRadius": "8px",
+                                                "textAlign": "center",
+                                                "cursor": "pointer",
+                                                "backgroundColor": "#f8f9fa"
+                                            }
+                                        ),
+                                        html.Div(className="mt-3"),
+                                        dcc.Loading(
+                                            type="default",
+                                            children=[
+                                                dbc.Alert(
+                                                    id="fin_upload_status",
+                                                    color="info",
+                                                    className="py-2 mb-3",
+                                                    children="Upload 2 files to begin."
+                                                ),
+                                                html.Div(
+                                                    id="fin_files_table_wrapper",
+                                                    children=dbc.Alert(
+                                                        "No files uploaded yet.",
+                                                        color="secondary",
+                                                        className="mb-0"
+                                                    )
+                                                )
+                                            ]
+                                        )
+                                    ]
+                                )
+                            ]
+                        )
+                    ),
+                    
+                    # File Selection Card
+                    dbc.Col(
+                        md=6,
+                        children=dbc.Card(
+                            className="h-100 shadow-sm",
+                            children=[
+                                dbc.CardHeader(
+                                    html.Div([
+                                        html.Span("File Selection", className="fw-semibold"),
+                                        html.Span(" - Select current and previous files", className="text-muted small")
+                                    ])
+                                ),
+                                dbc.CardBody(
+                                    children=[
+                                        dbc.Label("Current period data:"),
+                                        dcc.Dropdown(
+                                            id="fin_current_dropdown",
+                                            options=[],
+                                            value=None,
+                                            placeholder="Select current file",
+                                            clearable=False,
+                                        ),
+                                        html.Div(className="mb-3"),
+                                        dbc.Label("Previous period data:"),
+                                        dcc.Dropdown(
+                                            id="fin_previous_dropdown",
+                                            options=[],
+                                            value=None,
+                                            placeholder="Select previous file",
+                                            clearable=False,
+                                        ),
+                                        html.Div(className="mt-3"),
+                                        dbc.Alert(
+                                            id="fin_selection_status",
+                                            color="info",
+                                            className="py-2 mb-0",
+                                            children="Upload files and select current/previous to continue."
+                                        )
+                                    ]
+                                )
+                            ]
+                        )
+                    )
+                ]
+            ),
+            
+            # Comparison Settings (shown after file selection)
+            html.Div(
+                id="fin_comparison_section",
+                style={"display": "none"},
+                children=[
+                    dbc.Row(
+                        className="g-3 mt-1",
+                        children=[
+                            dbc.Col(
+                                md=12,
+                                children=dbc.Card(
+                                    className="shadow-sm",
+                                    children=[
+                                        dbc.CardHeader(
+                                            html.Div([
+                                                html.Span("Comparison Settings", className="fw-semibold")
+                                            ])
+                                        ),
+                                        dbc.CardBody(
+                                            className="p-4",
+                                            children=[
+                                                dbc.Row(
+                                                    className="g-3",
+                                                    children=[
+                                                        dbc.Col(
+                                                            md=6,
+                                                            children=[
+                                                                dbc.Label("Key columns (read-only)"),
+                                                                dbc.InputGroup([
+                                                                    dbc.Input(
+                                                                        value=", ".join(FINANCIAL_KEY_COLUMNS),
+                                                                        disabled=True
+                                                                    ),
+                                                                    dbc.InputGroupText("composite key")
+                                                                ]),
+                                                                dbc.FormText("Used to match rows between files.")
+                                                            ]
+                                                        ),
+                                                        dbc.Col(
+                                                            md=6,
+                                                            children=[
+                                                                dbc.Label("Non-financial columns to compare"),
+                                                                dcc.Dropdown(
+                                                                    id="fin_compare_columns_dropdown",
+                                                                    options=compare_opts,
+                                                                    value=FINANCIAL_NON_FINANCIAL_COLUMNS,
+                                                                    multi=True,
+                                                                    placeholder="Select columns to compare"
+                                                                ),
+                                                                dbc.FormText("All selected by default.")
+                                                            ]
+                                                        )
+                                                    ]
+                                                ),
+                                                html.Div(className="mt-3"),
+                                                dbc.Row(
+                                                    className="g-2 align-items-center",
+                                                    children=[
+                                                        dbc.Col(
+                                                            md=3,
+                                                            children=dbc.Button(
+                                                                "Run Analysis",
+                                                                id="fin_run_btn",
+                                                                color="primary",
+                                                                className="w-100"
+                                                            )
+                                                        ),
+                                                        dbc.Col(
+                                                            md=9,
+                                                            children=dbc.Alert(
+                                                                id="fin_analysis_status",
+                                                                color="secondary",
+                                                                className="py-2 mb-0",
+                                                                children="Click 'Run Analysis' to start."
+                                                            )
+                                                        )
+                                                    ]
+                                                )
+                                            ]
+                                        )
+                                    ]
+                                )
+                            )
+                        ]
+                    )
+                ]
+            ),
+            
+            # Results Section (shown after analysis)
+            html.Div(
+                id="fin_results_section",
+                style={"display": "none"},
+                children=[
+                    dbc.Row(
+                        className="g-3 mt-1",
+                        children=[
+                            dbc.Col(
+                                md=12,
+                                children=dbc.Card(
+                                    className="shadow-sm",
+                                    children=[
+                                        dbc.CardHeader(
+                                            html.Div([
+                                                html.Span("Analysis Results", className="fw-semibold")
+                                            ])
+                                        ),
+                                        dbc.CardBody(
+                                            children=[
+                                                dcc.Tabs(
+                                                    id="fin_results_tabs",
+                                                    value="tab_mastergroup",
+                                                    children=[
+                                                        dcc.Tab(label="Mastergroup Mapping", value="tab_mastergroup"),
+                                                        dcc.Tab(label="Non-Financial Changes", value="tab_nonfinancial"),
+                                                        dcc.Tab(label="Financial Comparison", value="tab_financial"),
+                                                        dcc.Tab(label="Consolidated Report", value="tab_consolidated")
+                                                    ]
+                                                ),
+                                                html.Div(id="fin_results_content", className="mt-3"),
+                                                html.Div(className="mt-3"),
+                                                dbc.Row(
+                                                    className="g-2 align-items-center",
+                                                    children=[
+                                                        dbc.Col(
+                                                            md=3,
+                                                            children=dbc.Button(
+                                                                "Download Report (.xlsx)",
+                                                                id="fin_download_btn",
+                                                                color="success",
+                                                                className="w-100"
+                                                            )
+                                                        ),
+                                                        dbc.Col(
+                                                            md=9,
+                                                            children=dbc.Alert(
+                                                                id="fin_download_status",
+                                                                color="secondary",
+                                                                className="py-2 mb-0",
+                                                                children="Report ready for download."
+                                                            )
+                                                        )
+                                                    ]
+                                                )
+                                            ]
+                                        )
+                                    ]
+                                )
+                            )
+                        ]
+                    )
+                ]
+            ),
+            
+            dcc.Download(id="fin_report_download")
         ]
     )
 
@@ -948,6 +1244,428 @@ def download_report(n_clicks, report_path_store):
         return no_update, "Report not found. Try running comparison again.", "warning"
 
     return dcc.send_file(path), f"Downloading: {os.path.basename(path)}", "primary"
+
+# ============================================================================
+# FINANCIAL TAB CALLBACKS
+# ============================================================================
+
+@app.callback(
+    Output("fin_session_store", "data"),
+    Output("fin_files_store", "data"),
+    Output("fin_upload_status", "children"),
+    Output("fin_upload_status", "color"),
+    Output("fin_files_table_wrapper", "children"),
+    Output("fin_current_dropdown", "options"),
+    Output("fin_previous_dropdown", "options"),
+    Output("fin_comparison_section", "style"),
+    Output("fin_results_section", "style"),
+    Input("fin_upload", "contents"),
+    Input("fin_upload", "filename"),
+    Input("fin_clear_session_btn", "n_clicks"),
+    State("fin_session_store", "data"),
+    State("fin_files_store", "data"),
+    prevent_initial_call=True
+)
+def fin_handle_upload(contents_list, filename_list, clear_clicks, session_data, existing_files):
+    """Handle financial file uploads with GBM/CMB validation"""
+    triggered = dash.callback_context.triggered[0]["prop_id"].split(".")[0]
+    
+    if triggered == "fin_clear_session_btn":
+        if session_data and session_data.get("session_id"):
+            cleanup_session_dir(session_data["session_id"])
+        
+        return (
+            None, None,
+            "Upload 2 files to begin.", "info",
+            dbc.Alert("No files uploaded yet.", color="secondary", className="mb-0"),
+            [], [],
+            {"display": "none"},
+            {"display": "none"}
+        )
+    
+    if not contents_list or not filename_list:
+        return (no_update,) * 9
+    
+    session_id = (session_data or {}).get("session_id") or str(uuid.uuid4())
+    ensure_session_dir(session_id)
+    
+    files = existing_files or []
+    
+    # Validate file count
+    total_files = len(files) + len(filename_list)
+    if total_files > 2:
+        return (
+            session_data, files,
+            "❌ Error: Maximum 2 files allowed. Please clear session and re-upload.", "danger",
+            no_update, [], [],
+            {"display": "none"},
+            {"display": "none"}
+        )
+    
+    # Validate filenames for GBM/CMB
+    for fname in filename_list:
+        fname_upper = fname.upper()
+        has_gbm = "GBM" in fname_upper
+        has_cmb = "CMB" in fname_upper
+        
+        if not has_gbm and not has_cmb:
+            return (
+                session_data, files,
+                f"❌ Error: Filename '{fname}' must contain either 'GBM' or 'CMB'.", "danger",
+                no_update, [], [],
+                {"display": "none"},
+                {"display": "none"}
+            )
+        
+        if has_gbm and has_cmb:
+            return (
+                session_data, files,
+                f"❌ Error: Filename '{fname}' cannot contain both 'GBM' and 'CMB'.", "danger",
+                no_update, [], [],
+                {"display": "none"},
+                {"display": "none"}
+            )
+    
+    # Check file type consistency
+    all_filenames = [f["filename"] for f in files] + filename_list
+    file_types = []
+    for fname in all_filenames:
+        fname_upper = fname.upper()
+        if "GBM" in fname_upper:
+            file_types.append("GBM")
+        elif "CMB" in fname_upper:
+            file_types.append("CMB")
+    
+    if len(set(file_types)) > 1:
+        return (
+            session_data, files,
+            "❌ Error: Cannot mix GBM and CMB files. All files must be the same type.", "danger",
+            no_update, [], [],
+            {"display": "none"},
+            {"display": "none"}
+        )
+    
+    # Save files
+    for contents, fname in zip(contents_list, filename_list):
+        file_id = str(uuid.uuid4())
+        path = save_uploaded_xlsx(session_id, file_id, fname, contents)
+        
+        files.append({
+            "file_id": file_id,
+            "filename": fname,
+            "path": path,
+            "file_type": file_types[0] if file_types else "Unknown"
+        })
+    
+    # Create file table
+    table_rows = [{"filename": f["filename"], "type": f["file_type"]} for f in files]
+    files_table = dash_table.DataTable(
+        columns=[
+            {"name": "Filename", "id": "filename"},
+            {"name": "Type", "id": "type"}
+        ],
+        data=table_rows,
+        style_cell={"padding": "8px", "fontSize": "13px"},
+        style_header={"fontWeight": "bold"}
+    )
+    
+    # Create dropdown options
+    dropdown_opts = [{"label": f["filename"], "value": f["file_id"]} for f in files]
+    
+    msg = f"✅ Uploaded {len(filename_list)} file(s). Total: {len(files)}/2 files."
+    color = "success" if len(files) == 2 else "info"
+    
+    return (
+        {"session_id": session_id},
+        files,
+        msg,
+        color,
+        files_table,
+        dropdown_opts,
+        dropdown_opts,
+        {"display": "none"},
+        {"display": "none"}
+    )
+
+
+@app.callback(
+    Output("fin_comparison_section", "style", allow_duplicate=True),
+    Output("fin_selection_status", "children"),
+    Output("fin_selection_status", "color"),
+    Output("fin_meta_store", "data"),
+    Input("fin_current_dropdown", "value"),
+    Input("fin_previous_dropdown", "value"),
+    prevent_initial_call=True
+)
+def fin_toggle_comparison_section(current_id, previous_id):
+    """Show comparison section when both files are selected"""
+    if current_id and previous_id:
+        if current_id == previous_id:
+            return (
+                {"display": "none"},
+                "❌ Error: Current and Previous files must be different.",
+                "danger",
+                None
+            )
+        
+        return (
+            {"display": "block"},
+            "✅ Files selected. Configure settings and run analysis below.",
+            "success",
+            {"current_file_id": current_id, "previous_file_id": previous_id}
+        )
+    
+    return (
+        {"display": "none"},
+        "Select both current and previous files to continue.",
+        "info",
+        None
+    )
+
+
+@app.callback(
+    Output("fin_results_store", "data"),
+    Output("fin_report_path_store", "data"),
+    Output("fin_analysis_status", "children"),
+    Output("fin_analysis_status", "color"),
+    Output("fin_results_section", "style", allow_duplicate=True),
+    Input("fin_run_btn", "n_clicks"),
+    State("fin_session_store", "data"),
+    State("fin_files_store", "data"),
+    State("fin_meta_store", "data"),
+    State("fin_compare_columns_dropdown", "value"),
+    prevent_initial_call=True
+)
+def fin_run_analysis(n_clicks, session_data, files_store, meta_store, compare_cols):
+    """Run all three financial analyses and generate report"""
+    if not session_data or not files_store or not meta_store:
+        return (
+            None, None,
+            "Please upload and select files first.",
+            "warning",
+            {"display": "none"}
+        )
+    
+    current_id = meta_store.get("current_file_id")
+    previous_id = meta_store.get("previous_file_id")
+    
+    if not current_id or not previous_id:
+        return (
+            None, None,
+            "Please select both current and previous files.",
+            "warning",
+            {"display": "none"}
+        )
+    
+    # Get file paths
+    files_by_id = {f["file_id"]: f for f in files_store}
+    current_file = files_by_id.get(current_id)
+    previous_file = files_by_id.get(previous_id)
+    
+    if not current_file or not previous_file:
+        return (
+            None, None,
+            "Error: File not found.",
+            "danger",
+            {"display": "none"}
+        )
+    
+    try:
+        # Read files
+        df_current = _read_financial_file(current_file["path"])
+        df_previous = _read_financial_file(previous_file["path"])
+        
+        # Validate required columns
+        for col in FINANCIAL_KEY_COLUMNS:
+            if col not in df_current.columns:
+                raise ValueError(f"Column '{col}' not found in current file")
+            if col not in df_previous.columns:
+                raise ValueError(f"Column '{col}' not found in previous file")
+        
+        # Use selected compare columns or default
+        compare_columns = compare_cols if compare_cols else FINANCIAL_NON_FINANCIAL_COLUMNS
+        
+        # Analysis 1: Mastergroup Validation
+        df_mastergroup = run_mastergroup_validation(df_current, threshold=FINANCIAL_FUZZY_THRESHOLD)
+        
+        # Analysis 2: Non-Financial Comparison
+        df_nonfinancial = run_non_financial_comparison(
+            df_current, df_previous,
+            FINANCIAL_KEY_COLUMNS,
+            compare_columns
+        )
+        
+        # Analysis 3: Financial Comparison
+        df_financial = run_financial_comparison(
+            df_current, df_previous,
+            FINANCIAL_KEY_COLUMNS
+        )
+        
+        # Build Consolidated Report
+        df_consolidated = build_consolidated(
+            df_mastergroup, df_nonfinancial, df_financial,
+            FINANCIAL_KEY_COLUMNS
+        )
+        
+        # Generate report
+        session_id = session_data["session_id"]
+        out_dir = ensure_session_dir(session_id)
+        report_path = os.path.join(
+            out_dir,
+            f"financial_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        )
+        
+        write_financial_report_xlsx(
+            report_path,
+            df_mastergroup,
+            df_nonfinancial,
+            df_financial,
+            df_consolidated
+        )
+        
+        # Store results for display
+        results = {
+            "mastergroup": df_mastergroup.head(1000).to_dict("records"),
+            "nonfinancial": df_nonfinancial.head(1000).to_dict("records"),
+            "financial": df_financial.head(1000).to_dict("records"),
+            "consolidated": df_consolidated.head(1000).to_dict("records"),
+            "summary": {
+                "total_records": len(df_current),
+                "matched": len(df_mastergroup[df_mastergroup["Match Status"] == "Matched"]),
+                "not_matched": len(df_mastergroup[df_mastergroup["Match Status"] == "Not Matched"]),
+                "added": len(df_nonfinancial[df_nonfinancial["Change Type"] == "Added"]) if not df_nonfinancial.empty else 0,
+                "deleted": len(df_nonfinancial[df_nonfinancial["Change Type"] == "Deleted"]) if not df_nonfinancial.empty else 0,
+                "modified": len(df_nonfinancial[df_nonfinancial["Change Type"] == "Modified"]) if not df_nonfinancial.empty else 0,
+            }
+        }
+        
+        summary_text = (
+            f"✅ Analysis complete! "
+            f"Matched: {results['summary']['matched']}, "
+            f"Not Matched: {results['summary']['not_matched']}, "
+            f"Added: {results['summary']['added']}, "
+            f"Modified: {results['summary']['modified']}, "
+            f"Deleted: {results['summary']['deleted']}"
+        )
+        
+        return (
+            results,
+            {"report_path": report_path},
+            summary_text,
+            "success",
+            {"display": "block"}
+        )
+        
+    except Exception as e:
+        return (
+            None, None,
+            f"❌ Error: {str(e)}",
+            "danger",
+            {"display": "none"}
+        )
+
+
+@app.callback(
+    Output("fin_results_content", "children"),
+    Input("fin_results_tabs", "value"),
+    State("fin_results_store", "data"),
+    prevent_initial_call=True
+)
+def fin_render_results_tab(tab_value, results_store):
+    """Render the selected results tab"""
+    if not results_store:
+        return dbc.Alert("No results available.", color="secondary")
+    
+    if tab_value == "tab_mastergroup":
+        data = results_store.get("mastergroup", [])
+        if not data:
+            return dbc.Alert("No mastergroup data available.", color="secondary")
+        
+        columns = [{"name": k, "id": k} for k in data[0].keys()]
+        return dash_table.DataTable(
+            columns=columns,
+            data=data,
+            page_size=20,
+            filter_action="native",
+            sort_action="native",
+            style_table={"overflowX": "auto"},
+            style_cell={"padding": "8px", "fontSize": "13px", "maxWidth": "200px", "overflow": "hidden", "textOverflow": "ellipsis"},
+            style_header={"backgroundColor": "#f8f9fa", "fontWeight": "bold"}
+        )
+    
+    elif tab_value == "tab_nonfinancial":
+        data = results_store.get("nonfinancial", [])
+        if not data:
+            return dbc.Alert("No non-financial changes detected.", color="info")
+        
+        columns = [{"name": k, "id": k} for k in data[0].keys()]
+        return dash_table.DataTable(
+            columns=columns,
+            data=data,
+            page_size=20,
+            filter_action="native",
+            sort_action="native",
+            style_table={"overflowX": "auto"},
+            style_cell={"padding": "8px", "fontSize": "13px", "maxWidth": "200px", "overflow": "hidden", "textOverflow": "ellipsis"},
+            style_header={"backgroundColor": "#f8f9fa", "fontWeight": "bold"}
+        )
+    
+    elif tab_value == "tab_financial":
+        data = results_store.get("financial", [])
+        if not data:
+            return dbc.Alert("No financial data available.", color="secondary")
+        
+        columns = [{"name": k, "id": k} for k in data[0].keys()]
+        return dash_table.DataTable(
+            columns=columns,
+            data=data,
+            page_size=20,
+            filter_action="native",
+            sort_action="native",
+            style_table={"overflowX": "auto"},
+            style_cell={"padding": "8px", "fontSize": "13px", "maxWidth": "200px", "overflow": "hidden", "textOverflow": "ellipsis"},
+            style_header={"backgroundColor": "#f8f9fa", "fontWeight": "bold"}
+        )
+    
+    elif tab_value == "tab_consolidated":
+        data = results_store.get("consolidated", [])
+        if not data:
+            return dbc.Alert("No consolidated data available.", color="secondary")
+        
+        columns = [{"name": k, "id": k} for k in data[0].keys()]
+        return dash_table.DataTable(
+            columns=columns,
+            data=data,
+            page_size=20,
+            filter_action="native",
+            sort_action="native",
+            style_table={"overflowX": "auto"},
+            style_cell={"padding": "8px", "fontSize": "13px", "maxWidth": "200px", "overflow": "hidden", "textOverflow": "ellipsis"},
+            style_header={"backgroundColor": "#f8f9fa", "fontWeight": "bold"}
+        )
+    
+    return dbc.Alert("Unknown tab selected.", color="warning")
+
+
+@app.callback(
+    Output("fin_report_download", "data"),
+    Output("fin_download_status", "children"),
+    Output("fin_download_status", "color"),
+    Input("fin_download_btn", "n_clicks"),
+    State("fin_report_path_store", "data"),
+    prevent_initial_call=True
+)
+def fin_download_report(n_clicks, report_path_store):
+    """Download the generated financial report"""
+    if not report_path_store or not report_path_store.get("report_path"):
+        return no_update, "Run analysis first to generate a report.", "warning"
+    
+    path = report_path_store["report_path"]
+    if not os.path.exists(path):
+        return no_update, "Report not found. Try running analysis again.", "danger"
+    
+    return dcc.send_file(path), f"Downloading: {os.path.basename(path)}", "success"
+
 
 if __name__ == "__main__":
     app.run_server (debug=True)
