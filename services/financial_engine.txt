@@ -280,6 +280,15 @@ def run_financial_comparison(
     df_current['_composite_key'] = _build_composite_key(df_current, key_cols)
     df_previous['_composite_key'] = _build_composite_key(df_previous, key_cols)
     
+    # Handle duplicates: keep first occurrence
+    if df_current['_composite_key'].duplicated().any():
+        dup_mask = df_current['_composite_key'].duplicated(keep='first')
+        df_current = df_current[~dup_mask].copy()
+    
+    if df_previous['_composite_key'].duplicated().any():
+        dup_mask = df_previous['_composite_key'].duplicated(keep='first')
+        df_previous = df_previous[~dup_mask].copy()
+    
     current_map = df_current.set_index('_composite_key', drop=False)
     previous_map = df_previous.set_index('_composite_key', drop=False)
     
@@ -371,6 +380,11 @@ def build_consolidated(
     # Build composite keys for all dataframes
     df_mg = df_mastergroup.copy()
     df_mg['_composite_key'] = _build_composite_key(df_mg, key_cols)
+    
+    # Handle duplicates in mastergroup: keep first occurrence
+    if df_mg['_composite_key'].duplicated().any():
+        dup_mask = df_mg['_composite_key'].duplicated(keep='first')
+        df_mg = df_mg[~dup_mask].copy()
     
     # For non-financial, composite key already exists
     df_nf = df_nonfinancial.copy()
