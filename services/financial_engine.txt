@@ -40,6 +40,66 @@ def _read_financial_file(path: str) -> pd.DataFrame:
     return df
 
 
+def validate_financial_files(
+    current_path: str,
+    previous_path: str,
+    key_cols: List[str]
+) -> Dict[str, Any]:
+    """
+    Validate financial files and return statistics about duplicates.
+    
+    Args:
+        current_path: Path to current file
+        previous_path: Path to previous file
+        key_cols: List of key column names
+    
+    Returns:
+        Dictionary with validation statistics
+    """
+    # Read files
+    df_current = _read_financial_file(current_path)
+    df_previous = _read_financial_file(previous_path)
+    
+    # Build composite keys
+    df_current['_composite_key'] = _build_composite_key(df_current, key_cols)
+    df_previous['_composite_key'] = _build_composite_key(df_previous, key_cols)
+    
+    # Check for duplicates
+    current_total = len(df_current)
+    previous_total = len(df_previous)
+    
+    current_duplicates = []
+    current_dup_count = 0
+    if df_current['_composite_key'].duplicated().any():
+        dup_mask = df_current['_composite_key'].duplicated(keep='first')
+        current_dup_count = dup_mask.sum()
+        dup_keys = df_current[dup_mask]['_composite_key'].unique()
+        current_duplicates = dup_keys[:5].tolist()  # Sample of 5
+    
+    previous_duplicates = []
+    previous_dup_count = 0
+    if df_previous['_composite_key'].duplicated().any():
+        dup_mask = df_previous['_composite_key'].duplicated(keep='first')
+        previous_dup_count = dup_mask.sum()
+        dup_keys = df_previous[dup_mask]['_composite_key'].unique()
+        previous_duplicates = dup_keys[:5].tolist()  # Sample of 5
+    
+    current_unique = current_total - current_dup_count
+    previous_unique = previous_total - previous_dup_count
+    
+    return {
+        "current_total_rows": current_total,
+        "current_unique_keys": current_unique,
+        "current_duplicate_rows": current_dup_count,
+        "current_duplicate_samples": current_duplicates,
+        "previous_total_rows": previous_total,
+        "previous_unique_keys": previous_unique,
+        "previous_duplicate_rows": previous_dup_count,
+        "previous_duplicate_samples": previous_duplicates,
+        "has_duplicates": current_dup_count > 0 or previous_dup_count > 0
+    }
+
+
 def run_mastergroup_validation(df: pd.DataFrame, threshold: int = 70) -> pd.DataFrame:
     """
     Analysis 1: Mastergroup Mapping Validation
@@ -111,11 +171,23 @@ def run_non_financial_comparison(
     if (df_previous['_composite_key'] == '').any():
         raise ValueError("Empty composite keys found in previous file")
     
-    # Check for duplicates
+    # Handle duplicates: keep first occurrence, track what was dropped
+    current_duplicates = []
+    previous_duplicates = []
+    
     if df_current['_composite_key'].duplicated().any():
-        raise ValueError("Duplicate composite keys found in current file")
+        dup_mask = df_current['_composite_key'].duplicated(keep='first')
+        dup_keys = df_current[dup_mask]['_composite_key'].unique()
+        current_duplicates = dup_keys.tolist()
+        # Keep only first occurrence
+        df_current = df_current[~dup_mask].copy()
+    
     if df_previous['_composite_key'].duplicated().any():
-        raise ValueError("Duplicate composite keys found in previous file")
+        dup_mask = df_previous['_composite_key'].duplicated(keep='first')
+        dup_keys = df_previous[dup_mask]['_composite_key'].unique()
+        previous_duplicates = dup_keys.tolist()
+        # Keep only first occurrence
+        df_previous = df_previous[~dup_mask].copy()
     
     current_map = df_current.set_index('_composite_key', drop=False)
     previous_map = df_previous.set_index('_composite_key', drop=False)
