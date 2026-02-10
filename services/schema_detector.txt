@@ -1,5 +1,4 @@
 from typing import Dict, List, Optional, Any
-import openpyxl
 
 
 def _norm(s) -> str:
@@ -8,29 +7,37 @@ def _norm(s) -> str:
     return str(s).strip().lower()
 
 def detect_header_row(path: str, expected_columns: List[str], max_rows: int = 35, max_cols: int = 80, sheet_name: Optional[str] = None) -> Optional[int]:
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb[wb.sheetnames[0]]
-
+    import pandas as pd
+    
     expected_norm = set([_norm(col) for col in expected_columns if _norm(col)])
 
     if not expected_norm:
         raise ValueError("No valid expected columns provided")
     
+    # Read first max_rows with calamine (much faster than openpyxl cell iteration)
+    df = pd.read_excel(
+        path, 
+        sheet_name=sheet_name or 0,
+        header=None,
+        nrows=max_rows,
+        engine='calamine'
+    )
+    
+    # Limit to max_cols
+    if df.shape[1] > max_cols:
+        df = df.iloc[:, :max_cols]
+    
     best_row = None
     best_score = -1
 
-    for r in range(1, max_rows + 1):
-        values = []
-        for c in range(1, max_cols + 1):
-            cell_value = ws.cell(row=r, column=c).value
-            norm_value = _norm(cell_value)
-            if norm_value:
-                values.append(norm_value)
+    for r in range(len(df)):
+        # Get all values in this row, normalize them
+        values = [_norm(val) for val in df.iloc[r].values if pd.notna(val)]
         score = sum(1 for v in values if v in expected_norm)
 
         if score > best_score:
             best_score = score
-            best_row = r
+            best_row = r + 1  # Convert to 1-based
 
     if best_score is None or best_score == 0:
         raise ValueError("No header row detected with the given expected columns")
