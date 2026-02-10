@@ -56,7 +56,7 @@ def extract_latest_mastergroup_date(path, header_row_1based=None):
         except Exception:
             return None
     
-    df = pd.read_excel(path, header=header_row_1based-1, engine='openpyxl')
+    df = pd.read_excel(path, header=header_row_1based-1, engine='calamine')
     date_cols = ["Date of creation", "Last amendment date", "Mastergroup Last updated date"]
     latest_dates = []
     for col in date_cols:
