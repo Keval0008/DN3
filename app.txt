@@ -1545,12 +1545,25 @@ def fin_validate_data(n_clicks, files_store, meta_store):
         return None, dbc.Alert("Error: File not found.", color="danger"), {"display": "none"}
     
     try:
-        # Run validation
-        validation_stats = validate_financial_files(
+        # Run validation (now reads files in parallel and returns prepared DataFrames)
+        validation_result = validate_financial_files(
             current_file["path"],
             previous_file["path"],
             FINANCIAL_KEY_COLUMNS
         )
+        
+        # Extract DataFrames for caching
+        df_current = validation_result.pop("df_current")
+        df_previous = validation_result.pop("df_previous")
+        
+        # Cache the prepared DataFrames as JSON for reuse in analysis
+        cache_data = {
+            "current_file_id": current_id,
+            "previous_file_id": previous_id,
+            "df_current_json": df_current.to_json(orient='split'),
+            "df_previous_json": df_previous.to_json(orient='split'),
+            "stats": validation_result  # Stats without DataFrames
+        }
         
         # Build preview UI
         preview_content = dbc.Card([
@@ -1560,24 +1573,24 @@ def fin_validate_data(n_clicks, files_store, meta_store):
                     dbc.Col([
                         html.H6("Current File", className="text-primary"),
                         html.P([
-                            html.Strong("Total Rows: "), f"{validation_stats['current_total_rows']:,}", html.Br(),
-                            html.Strong("Unique Keys: "), f"{validation_stats['current_unique_keys']:,}", html.Br(),
+                            html.Strong("Total Rows: "), f"{validation_result['current_total_rows']:,}", html.Br(),
+                            html.Strong("Unique Keys: "), f"{validation_result['current_unique_keys']:,}", html.Br(),
                             html.Strong("Duplicate Rows: "), 
                             html.Span(
-                                f"{validation_stats['current_duplicate_rows']:,}",
-                                className="text-danger fw-bold" if validation_stats['current_duplicate_rows'] > 0 else ""
+                                f"{validation_result['current_duplicate_rows']:,}",
+                                className="text-danger fw-bold" if validation_result['current_duplicate_rows'] > 0 else ""
                             )
                         ], className="mb-0")
                     ], md=6),
                     dbc.Col([
                         html.H6("Previous File", className="text-secondary"),
                         html.P([
-                            html.Strong("Total Rows: "), f"{validation_stats['previous_total_rows']:,}", html.Br(),
-                            html.Strong("Unique Keys: "), f"{validation_stats['previous_unique_keys']:,}", html.Br(),
+                            html.Strong("Total Rows: "), f"{validation_result['previous_total_rows']:,}", html.Br(),
+                            html.Strong("Unique Keys: "), f"{validation_result['previous_unique_keys']:,}", html.Br(),
                             html.Strong("Duplicate Rows: "), 
                             html.Span(
-                                f"{validation_stats['previous_duplicate_rows']:,}",
-                                className="text-danger fw-bold" if validation_stats['previous_duplicate_rows'] > 0 else ""
+                                f"{validation_result['previous_duplicate_rows']:,}",
+                                className="text-danger fw-bold" if validation_result['previous_duplicate_rows'] > 0 else ""
                             )
                         ], className="mb-0")
                     ], md=6)
@@ -1591,14 +1604,14 @@ def fin_validate_data(n_clicks, files_store, meta_store):
                         html.P("The following duplicate keys will be automatically removed (keeping first occurrence):", className="mb-2"),
                         html.Div([
                             html.Strong("Current File Samples:"),
-                            html.Ul([html.Li(key) for key in validation_stats['current_duplicate_samples']]) if validation_stats['current_duplicate_samples'] else html.P("None", className="text-muted ms-3")
-                        ]) if validation_stats['current_duplicate_rows'] > 0 else None,
+                            html.Ul([html.Li(key) for key in validation_result['current_duplicate_samples']]) if validation_result['current_duplicate_samples'] else html.P("None", className="text-muted ms-3")
+                        ]) if validation_result['current_duplicate_rows'] > 0 else None,
                         html.Div([
                             html.Strong("Previous File Samples:"),
-                            html.Ul([html.Li(key) for key in validation_stats['previous_duplicate_samples']]) if validation_stats['previous_duplicate_samples'] else html.P("None", className="text-muted ms-3")
-                        ]) if validation_stats['previous_duplicate_rows'] > 0 else None
+                            html.Ul([html.Li(key) for key in validation_result['previous_duplicate_samples']]) if validation_result['previous_duplicate_samples'] else html.P("None", className="text-muted ms-3")
+                        ]) if validation_result['previous_duplicate_rows'] > 0 else None
                     ], color="warning")
-                ]) if validation_stats['has_duplicates'] else None,
+                ]) if validation_result['has_duplicates'] else None,
                 
                 dbc.Alert([
                     html.I(className="bi bi-check-circle me-2"),
@@ -1608,7 +1621,7 @@ def fin_validate_data(n_clicks, files_store, meta_store):
         ], className="shadow-sm")
         
         return (
-            validation_stats,
+            cache_data,
             preview_content,
             {"display": "block"}  # Show comparison section
         )
@@ -1633,9 +1646,10 @@ def fin_validate_data(n_clicks, files_store, meta_store):
     State("fin_files_store", "data"),
     State("fin_meta_store", "data"),
     State("fin_compare_columns_dropdown", "value"),
+    State("fin_validation_store", "data"),
     prevent_initial_call=True
 )
-def fin_run_analysis(n_clicks, session_data, files_store, meta_store, compare_cols):
+def fin_run_analysis(n_clicks, session_data, files_store, meta_store, compare_cols, validation_cache):
     """Run all three financial analyses and generate report"""
     if not session_data or not files_store or not meta_store:
         return (
@@ -1670,27 +1684,43 @@ def fin_run_analysis(n_clicks, session_data, files_store, meta_store, compare_co
         )
     
     try:
-        # Read files
-        df_current = _read_financial_file(current_file["path"])
-        df_previous = _read_financial_file(previous_file["path"])
+        # Check if we have cached data from validation step
+        cache_hit = (
+            validation_cache and
+            validation_cache.get("current_file_id") == current_id and
+            validation_cache.get("previous_file_id") == previous_id and
+            "df_current_json" in validation_cache and
+            "df_previous_json" in validation_cache
+        )
         
-        # Validate required columns
-        for col in FINANCIAL_KEY_COLUMNS:
-            if col not in df_current.columns:
-                raise ValueError(f"Column '{col}' not found in current file")
-            if col not in df_previous.columns:
-                raise ValueError(f"Column '{col}' not found in previous file")
-        
-        # Pre-build composite keys ONCE (eliminates redundant work in each function)
-        from services.financial_engine import _build_composite_key
-        df_current['_composite_key'] = _build_composite_key(df_current, FINANCIAL_KEY_COLUMNS)
-        df_previous['_composite_key'] = _build_composite_key(df_previous, FINANCIAL_KEY_COLUMNS)
-        
-        # De-duplicate ONCE (eliminates redundant work in each function)
-        if df_current['_composite_key'].duplicated().any():
-            df_current = df_current.drop_duplicates(subset='_composite_key', keep='first')
-        if df_previous['_composite_key'].duplicated().any():
-            df_previous = df_previous.drop_duplicates(subset='_composite_key', keep='first')
+        if cache_hit:
+            # Use cached DataFrames (avoids re-reading files!)
+            import pandas as pd
+            df_current = pd.read_json(validation_cache["df_current_json"], orient='split')
+            df_previous = pd.read_json(validation_cache["df_previous_json"], orient='split')
+        else:
+            # Cache miss - read files (parallel read + inline header detection)
+            from services.financial_engine import read_financial_files_parallel, _build_composite_key
+            df_current, df_previous = read_financial_files_parallel(
+                current_file["path"],
+                previous_file["path"]
+            )
+            
+            # Validate required columns
+            for col in FINANCIAL_KEY_COLUMNS:
+                if col not in df_current.columns:
+                    raise ValueError(f"Column '{col}' not found in current file")
+                if col not in df_previous.columns:
+                    raise ValueError(f"Column '{col}' not found in previous file")
+            
+            # Build composite keys and de-duplicate
+            df_current['_composite_key'] = _build_composite_key(df_current, FINANCIAL_KEY_COLUMNS)
+            df_previous['_composite_key'] = _build_composite_key(df_previous, FINANCIAL_KEY_COLUMNS)
+            
+            if df_current['_composite_key'].duplicated().any():
+                df_current = df_current.drop_duplicates(subset='_composite_key', keep='first')
+            if df_previous['_composite_key'].duplicated().any():
+                df_previous = df_previous.drop_duplicates(subset='_composite_key', keep='first')
         
         # Use selected compare columns or default
         compare_columns = compare_cols if compare_cols else FINANCIAL_NON_FINANCIAL_COLUMNS
@@ -1748,10 +1778,10 @@ def fin_run_analysis(n_clicks, session_data, files_store, meta_store, compare_co
         
         # Store results for display
         results = {
-            "mastergroup": df_mastergroup.head(1000).to_dict("records"),
-            "nonfinancial": df_nonfinancial.head(1000).to_dict("records"),
-            "financial": df_financial.head(1000).to_dict("records"),
-            "consolidated": df_consolidated.head(1000).to_dict("records"),
+            "mastergroup": df_mastergroup.to_dict("records"),
+            "nonfinancial": df_nonfinancial.to_dict("records"),
+            "financial": df_financial.to_dict("records"),
+            "consolidated": df_consolidated.to_dict("records"),
             "summary": {
                 "total_records": len(df_current),
                 "matched": len(df_mastergroup[df_mastergroup["Match Status"] == "Matched"]),
@@ -1951,9 +1981,10 @@ def fin_update_filter_options(tab_value, results_store):
     Output("fin_sub_filter", "data", allow_duplicate=True),
     Input({"type": "fin_filter_card", "index": ALL}, "n_clicks"),
     State({"type": "fin_filter_card", "index": ALL}, "id"),
+    State("fin_sub_filter", "data"),
     prevent_initial_call=True
 )
-def fin_handle_card_click(n_clicks_list, card_ids):
+def fin_handle_card_click(n_clicks_list, card_ids, current_filter):
     """Handle clicks on summary cards to filter data"""
     if not any(n_clicks_list):
         raise PreventUpdate
@@ -1967,7 +1998,13 @@ def fin_handle_card_click(n_clicks_list, card_ids):
     if triggered_id:
         import json
         card_id = json.loads(triggered_id)
-        return card_id["index"]
+        clicked_index = card_id["index"]
+        
+        # Toggle behavior: if clicking the same filter, reset to "all"
+        if current_filter == clicked_index:
+            return "all"
+        else:
+            return clicked_index
     
     raise PreventUpdate
 
