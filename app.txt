@@ -725,9 +725,15 @@ def financial_tab_layout():
                                                         html.Div(id="fin_filter_summary", className="mb-3")
                                                     ]
                                                 ),
-                                                dcc.Loading(
-                                                    type="default",
-                                                    children=html.Div(id="fin_results_content", className="mt-3")
+                                                # Pre-rendered tab content divs (toggled with CSS)
+                                                html.Div(
+                                                    className="mt-3",
+                                                    children=[
+                                                        html.Div(id="fin_tab_mastergroup_content", style={"display": "block"}),
+                                                        html.Div(id="fin_tab_nonfinancial_content", style={"display": "none"}),
+                                                        html.Div(id="fin_tab_financial_content", style={"display": "none"}),
+                                                        html.Div(id="fin_tab_consolidated_content", style={"display": "none"})
+                                                    ]
                                                 ),
                                                 html.Div(className="mt-3"),
                                                 dbc.Row(
@@ -1856,7 +1862,8 @@ def fin_update_filter_options(tab_value, results_store):
                 ]),
                 className="text-center",
                 style={"cursor": "default"},
-                id={"type": "fin_filter_card", "index": "all"}
+                id={"type": "fin_filter_card", "index": "all"},
+                n_clicks=0
             ),
             dbc.Card(
                 dbc.CardBody([
@@ -1865,7 +1872,8 @@ def fin_update_filter_options(tab_value, results_store):
                 ]),
                 className="text-center",
                 style={"cursor": "pointer", "transition": "all 0.2s"},
-                id={"type": "fin_filter_card", "index": "Matched"}
+                id={"type": "fin_filter_card", "index": "Matched"},
+                n_clicks=0
             ),
             dbc.Card(
                 dbc.CardBody([
@@ -1874,7 +1882,8 @@ def fin_update_filter_options(tab_value, results_store):
                 ]),
                 className="text-center",
                 style={"cursor": "pointer", "transition": "all 0.2s"},
-                id={"type": "fin_filter_card", "index": "Not Matched"}
+                id={"type": "fin_filter_card", "index": "Not Matched"},
+                n_clicks=0
             )
         ]
         return "all", dbc.Row([dbc.Col(card, md=4) for card in cards], className="g-2")
@@ -1892,7 +1901,8 @@ def fin_update_filter_options(tab_value, results_store):
                 ]),
                 className="text-center",
                 style={"cursor": "default"},
-                id={"type": "fin_filter_card", "index": "all"}
+                id={"type": "fin_filter_card", "index": "all"},
+                n_clicks=0
             ),
             dbc.Card(
                 dbc.CardBody([
@@ -1901,7 +1911,8 @@ def fin_update_filter_options(tab_value, results_store):
                 ]),
                 className="text-center",
                 style={"cursor": "pointer", "transition": "all 0.2s"},
-                id={"type": "fin_filter_card", "index": "Added"}
+                id={"type": "fin_filter_card", "index": "Added"},
+                n_clicks=0
             ),
             dbc.Card(
                 dbc.CardBody([
@@ -1910,7 +1921,8 @@ def fin_update_filter_options(tab_value, results_store):
                 ]),
                 className="text-center",
                 style={"cursor": "pointer", "transition": "all 0.2s"},
-                id={"type": "fin_filter_card", "index": "Modified"}
+                id={"type": "fin_filter_card", "index": "Modified"},
+                n_clicks=0
             ),
             dbc.Card(
                 dbc.CardBody([
@@ -1919,7 +1931,8 @@ def fin_update_filter_options(tab_value, results_store):
                 ]),
                 className="text-center",
                 style={"cursor": "pointer", "transition": "all 0.2s"},
-                id={"type": "fin_filter_card", "index": "Deleted"}
+                id={"type": "fin_filter_card", "index": "Deleted"},
+                n_clicks=0
             )
         ]
         return "all", dbc.Row([dbc.Col(card, md=3) for card in cards], className="g-2")
@@ -1965,7 +1978,8 @@ def fin_update_filter_options(tab_value, results_store):
                     ]),
                     className="text-center",
                     style={"cursor": "pointer", "transition": "all 0.2s"},
-                    id={"type": "fin_filter_card", "index": status}
+                    id={"type": "fin_filter_card", "index": status},
+                    n_clicks=0
                 )
             )
         
@@ -2009,243 +2023,216 @@ def fin_handle_card_click(n_clicks_list, card_ids, current_filter):
     raise PreventUpdate
 
 
+# Callback to toggle tab visibility based on selected tab
 @app.callback(
-    Output("fin_results_content", "children"),
+    Output("fin_tab_mastergroup_content", "style"),
+    Output("fin_tab_nonfinancial_content", "style"),
+    Output("fin_tab_financial_content", "style"),
+    Output("fin_tab_consolidated_content", "style"),
     Input("fin_results_tabs", "value"),
-    Input("fin_sub_filter", "data"),
-    State("fin_results_store", "data"),
     prevent_initial_call=True
 )
-def fin_render_results_tab(tab_value, filter_value, results_store):
-    """Render the selected results tab with filtering and specific columns"""
+def fin_toggle_tab_visibility(tab_value):
+    """Toggle visibility of tab content divs using CSS"""
+    styles = {
+        "tab_mastergroup": ({"display": "block"}, {"display": "none"}, {"display": "none"}, {"display": "none"}),
+        "tab_nonfinancial": ({"display": "none"}, {"display": "block"}, {"display": "none"}, {"display": "none"}),
+        "tab_financial": ({"display": "none"}, {"display": "none"}, {"display": "block"}, {"display": "none"}),
+        "tab_consolidated": ({"display": "none"}, {"display": "none"}, {"display": "none"}, {"display": "block"})
+    }
+    return styles.get(tab_value, ({"display": "block"}, {"display": "none"}, {"display": "none"}, {"display": "none"}))
+
+
+# Helper function to create DataTable with common styling
+def _create_financial_datatable(data, display_cols):
+    """Create a DataTable with consistent styling"""
+    if not data:
+        return dbc.Alert("No data available.", color="secondary")
+    
+    # Filter data to only include display columns
+    filtered_data = []
+    for row in data:
+        filtered_row = {col: row.get(col, "") for col in display_cols if col in row}
+        filtered_data.append(filtered_row)
+    
+    if not filtered_data:
+        return dbc.Alert("No data available with the selected columns.", color="warning")
+    
+    columns = [{"name": k, "id": k} for k in display_cols if k in filtered_data[0]]
+    
+    return dash_table.DataTable(
+        columns=columns,
+        data=filtered_data,
+        page_size=20,
+        filter_action="native",
+        sort_action="native",
+        style_table={"overflowX": "auto"},
+        style_cell={
+            "padding": "8px",
+            "fontSize": "13px",
+            "minWidth": "100px",
+            "maxWidth": "300px",
+            "whiteSpace": "normal",
+            "height": "auto",
+            "textOverflow": "ellipsis"
+        },
+        style_data={
+            "whiteSpace": "normal",
+            "height": "auto",
+        },
+        style_header={
+            "backgroundColor": "#f8f9fa",
+            "fontWeight": "bold",
+            "whiteSpace": "normal",
+            "height": "auto"
+        },
+        tooltip_data=[
+            {col: {"value": str(row.get(col, "")), "type": "markdown"}
+             for col in display_cols if col in row}
+            for row in filtered_data
+        ],
+        tooltip_duration=None,
+        css=[{"selector": ".dash-table-tooltip", "rule": "background-color: #333; color: white; font-size: 12px; max-width: 400px;"}]
+    )
+
+
+# Mastergroup tab rendering with filtering
+@app.callback(
+    Output("fin_tab_mastergroup_content", "children"),
+    Input("fin_results_store", "data"),
+    Input("fin_sub_filter", "data"),
+    State("fin_results_tabs", "value"),
+    prevent_initial_call=True
+)
+def fin_render_mastergroup_tab(results_store, filter_value, current_tab):
+    """Render mastergroup tab with filtering"""
     if not results_store:
         return dbc.Alert("No results available.", color="secondary")
     
-    if tab_value == "tab_mastergroup":
-        data = results_store.get("mastergroup", [])
-        if not data:
-            return dbc.Alert("No mastergroup data available.", color="secondary")
-        
-        # Apply filter
-        if filter_value and filter_value != "all":
-            data = [r for r in data if r.get("Match Status") == filter_value]
-        
-        if not data:
-            return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
-        
-        # Select specific columns
-        display_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "Mastergroup Name", "Fuzzy Score", "Match Status"]
-        
-        # Filter data to only include display columns
-        filtered_data = []
-        for row in data:
-            filtered_row = {col: row.get(col, "") for col in display_cols if col in row}
-            filtered_data.append(filtered_row)
-        
-        if not filtered_data:
-            return dbc.Alert("No data available with the selected columns.", color="warning")
-        
-        columns = [{"name": k, "id": k} for k in display_cols if k in filtered_data[0]]
-        
-        return dash_table.DataTable(
-            columns=columns,
-            data=filtered_data,
-            page_size=20,
-            filter_action="native",
-            sort_action="native",
-            style_table={"overflowX": "auto"},
-            style_cell={
-                "padding": "8px", 
-                "fontSize": "13px", 
-                "minWidth": "100px",
-                "maxWidth": "300px",
-                "whiteSpace": "normal",
-                "height": "auto",
-                "textOverflow": "ellipsis"
-            },
-            style_data={
-                "whiteSpace": "normal",
-                "height": "auto",
-            },
-            style_header={
-                "backgroundColor": "#f8f9fa", 
-                "fontWeight": "bold",
-                "whiteSpace": "normal",
-                "height": "auto"
-            },
-            tooltip_data=[
-                {col: {"value": str(row.get(col, "")), "type": "markdown"} 
-                 for col in display_cols if col in row}
-                for row in filtered_data
-            ],
-            tooltip_duration=None,
-            css=[{"selector": ".dash-table-tooltip", "rule": "background-color: #333; color: white; font-size: 12px; max-width: 400px;"}]
-        )
+    data = results_store.get("mastergroup", [])
+    if not data:
+        return dbc.Alert("No mastergroup data available.", color="secondary")
     
-    elif tab_value == "tab_nonfinancial":
-        data = results_store.get("nonfinancial", [])
-        if not data:
-            return dbc.Alert("No non-financial changes detected.", color="info")
-        
-        # Apply filter
-        if filter_value and filter_value != "all":
-            data = [r for r in data if r.get("Change Type") == filter_value]
-        
-        if not data:
-            return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
-        
-        # Select specific columns
-        display_cols = ["Change Type", "Site Customer Number", "Site Customer Name", "Site Code", "Changed Fields", "Details"]
-        
-        # Filter data to only include display columns
-        filtered_data = []
-        for row in data:
-            filtered_row = {col: row.get(col, "") for col in display_cols if col in row}
-            filtered_data.append(filtered_row)
-        
-        if not filtered_data:
-            return dbc.Alert("No data available with the selected columns.", color="warning")
-        
-        columns = [{"name": k, "id": k} for k in display_cols if k in filtered_data[0]]
-        
-        return dash_table.DataTable(
-            columns=columns,
-            data=filtered_data,
-            page_size=20,
-            filter_action="native",
-            sort_action="native",
-            style_table={"overflowX": "auto"},
-            style_cell={
-                "padding": "8px", 
-                "fontSize": "13px", 
-                "minWidth": "100px",
-                "maxWidth": "300px",
-                "whiteSpace": "normal",
-                "height": "auto",
-                "textOverflow": "ellipsis"
-            },
-            style_data={
-                "whiteSpace": "normal",
-                "height": "auto",
-            },
-            style_header={
-                "backgroundColor": "#f8f9fa", 
-                "fontWeight": "bold",
-                "whiteSpace": "normal",
-                "height": "auto"
-            },
-            tooltip_data=[
-                {col: {"value": str(row.get(col, "")), "type": "markdown"} 
-                 for col in display_cols if col in row}
-                for row in filtered_data
-            ],
-            tooltip_duration=None,
-            css=[{"selector": ".dash-table-tooltip", "rule": "background-color: #333; color: white; font-size: 12px; max-width: 400px;"}]
-        )
+    # Apply filter only if we're on this tab
+    if current_tab == "tab_mastergroup" and filter_value and filter_value != "all":
+        data = [r for r in data if r.get("Match Status") == filter_value]
     
-    elif tab_value == "tab_financial":
-        data = results_store.get("financial", [])
-        if not data:
-            return dbc.Alert("No financial data available.", color="secondary")
-        
-        # Apply filter using exact status match
-        if filter_value and filter_value != "all":
-            data = [r for r in data if r.get("TOI Status") == filter_value]
-        
-        if not data:
-            return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
-        
-        # Select specific columns
-        display_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "TOI Previous", "TOI Current", "TOI Difference", "TOI Status"]
-        
-        # Filter data to only include display columns
-        filtered_data = []
-        for row in data:
-            filtered_row = {col: row.get(col, "") for col in display_cols if col in row}
-            filtered_data.append(filtered_row)
-        
-        if not filtered_data:
-            return dbc.Alert("No data available with the selected columns.", color="warning")
-        
-        columns = [{"name": k, "id": k} for k in display_cols if k in filtered_data[0]]
-        
-        return dash_table.DataTable(
-            columns=columns,
-            data=filtered_data,
-            page_size=20,
-            filter_action="native",
-            sort_action="native",
-            style_table={"overflowX": "auto"},
-            style_cell={
-                "padding": "8px", 
-                "fontSize": "13px", 
-                "minWidth": "100px",
-                "maxWidth": "300px",
-                "whiteSpace": "normal",
-                "height": "auto",
-                "textOverflow": "ellipsis"
-            },
-            style_data={
-                "whiteSpace": "normal",
-                "height": "auto",
-            },
-            style_header={
-                "backgroundColor": "#f8f9fa", 
-                "fontWeight": "bold",
-                "whiteSpace": "normal",
-                "height": "auto"
-            },
-            tooltip_data=[
-                {col: {"value": str(row.get(col, "")), "type": "markdown"} 
-                 for col in display_cols if col in row}
-                for row in filtered_data
-            ],
-            tooltip_duration=None,
-            css=[{"selector": ".dash-table-tooltip", "rule": "background-color: #333; color: white; font-size: 12px; max-width: 400px;"}]
-        )
+    if not data:
+        return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
     
-    elif tab_value == "tab_consolidated":
-        data = results_store.get("consolidated", [])
-        if not data:
-            return dbc.Alert("No consolidated data available.", color="secondary")
-        
-        columns = [{"name": k, "id": k} for k in data[0].keys()]
-        return dash_table.DataTable(
-            columns=columns,
-            data=data,
-            page_size=20,
-            filter_action="native",
-            sort_action="native",
-            style_table={"overflowX": "auto"},
-            style_cell={
-                "padding": "8px", 
-                "fontSize": "13px", 
-                "minWidth": "100px",
-                "maxWidth": "300px",
-                "whiteSpace": "normal",
-                "height": "auto",
-                "textOverflow": "ellipsis"
-            },
-            style_data={
-                "whiteSpace": "normal",
-                "height": "auto",
-            },
-            style_header={
-                "backgroundColor": "#f8f9fa", 
-                "fontWeight": "bold",
-                "whiteSpace": "normal",
-                "height": "auto"
-            },
-            tooltip_data=[
-                {col: {"value": str(row.get(col, "")), "type": "markdown"} 
-                 for col in data[0].keys()}
-                for row in data
-            ],
-            tooltip_duration=None,
-            css=[{"selector": ".dash-table-tooltip", "rule": "background-color: #333; color: white; font-size: 12px; max-width: 400px;"}]
-        )
+    display_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "Mastergroup Name", "Fuzzy Score", "Match Status"]
+    return _create_financial_datatable(data, display_cols)
+
+
+# Non-Financial tab rendering with filtering
+@app.callback(
+    Output("fin_tab_nonfinancial_content", "children"),
+    Input("fin_results_store", "data"),
+    Input("fin_sub_filter", "data"),
+    State("fin_results_tabs", "value"),
+    prevent_initial_call=True
+)
+def fin_render_nonfinancial_tab(results_store, filter_value, current_tab):
+    """Render non-financial tab with filtering"""
+    if not results_store:
+        return dbc.Alert("No results available.", color="secondary")
     
-    return dbc.Alert("Unknown tab selected.", color="warning")
+    data = results_store.get("nonfinancial", [])
+    if not data:
+        return dbc.Alert("No non-financial changes detected.", color="info")
+    
+    # Apply filter only if we're on this tab
+    if current_tab == "tab_nonfinancial" and filter_value and filter_value != "all":
+        data = [r for r in data if r.get("Change Type") == filter_value]
+    
+    if not data:
+        return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
+    
+    display_cols = ["Change Type", "Site Customer Number", "Site Customer Name", "Site Code", "Changed Fields", "Details"]
+    return _create_financial_datatable(data, display_cols)
+
+
+# Financial tab rendering with filtering
+@app.callback(
+    Output("fin_tab_financial_content", "children"),
+    Input("fin_results_store", "data"),
+    Input("fin_sub_filter", "data"),
+    State("fin_results_tabs", "value"),
+    prevent_initial_call=True
+)
+def fin_render_financial_tab(results_store, filter_value, current_tab):
+    """Render financial tab with filtering"""
+    if not results_store:
+        return dbc.Alert("No results available.", color="secondary")
+    
+    data = results_store.get("financial", [])
+    if not data:
+        return dbc.Alert("No financial data available.", color="secondary")
+    
+    # Apply filter only if we're on this tab using exact status match
+    if current_tab == "tab_financial" and filter_value and filter_value != "all":
+        data = [r for r in data if r.get("TOI Status") == filter_value]
+    
+    if not data:
+        return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
+    
+    display_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "TOI Previous", "TOI Current", "TOI Difference", "TOI Status"]
+    return _create_financial_datatable(data, display_cols)
+
+
+# Consolidated tab rendering (no filtering)
+@app.callback(
+    Output("fin_tab_consolidated_content", "children"),
+    Input("fin_results_store", "data"),
+    prevent_initial_call=True
+)
+def fin_render_consolidated_tab(results_store):
+    """Render consolidated tab (no filtering)"""
+    if not results_store:
+        return dbc.Alert("No results available.", color="secondary")
+    
+    data = results_store.get("consolidated", [])
+    if not data:
+        return dbc.Alert("No consolidated data available.", color="secondary")
+    
+    # Show all columns for consolidated view
+    columns = [{"name": k, "id": k} for k in data[0].keys()]
+    return dash_table.DataTable(
+        columns=columns,
+        data=data,
+        page_size=20,
+        filter_action="native",
+        sort_action="native",
+        style_table={"overflowX": "auto"},
+        style_cell={
+            "padding": "8px",
+            "fontSize": "13px",
+            "minWidth": "100px",
+            "maxWidth": "300px",
+            "whiteSpace": "normal",
+            "height": "auto",
+            "textOverflow": "ellipsis"
+        },
+        style_data={
+            "whiteSpace": "normal",
+            "height": "auto",
+        },
+        style_header={
+            "backgroundColor": "#f8f9fa",
+            "fontWeight": "bold",
+            "whiteSpace": "normal",
+            "height": "auto"
+        },
+        tooltip_data=[
+            {col: {"value": str(row.get(col, "")), "type": "markdown"}
+             for col in data[0].keys()}
+            for row in data
+        ],
+        tooltip_duration=None,
+        css=[{"selector": ".dash-table-tooltip", "rule": "background-color: #333; color: white; font-size: 12px; max-width: 400px;"}]
+    )
+
+
 
 
 @app.callback(
