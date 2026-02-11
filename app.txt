@@ -725,6 +725,13 @@ def financial_tab_layout():
                                                         html.Div(id="fin_filter_summary", className="mb-3")
                                                     ]
                                                 ),
+                                                # Progress indicator for tab rendering
+                                                html.Div(
+                                                    id="fin_render_progress",
+                                                    className="mt-3 mb-2"
+                                                ),
+                                                # Stores to track which tabs have been rendered
+                                                dcc.Store(id="fin_tabs_rendered", data={"mastergroup": False, "nonfinancial": False, "financial": False, "consolidated": False}),
                                                 # Pre-rendered tab content divs (toggled with CSS)
                                                 html.Div(
                                                     className="mt-3",
@@ -2096,108 +2103,189 @@ def _create_financial_datatable(data, display_cols):
     )
 
 
-# Mastergroup tab rendering with filtering
+# Mastergroup tab rendering with filtering (renders once, then only filters)
 @app.callback(
     Output("fin_tab_mastergroup_content", "children"),
+    Output("fin_tabs_rendered", "data", allow_duplicate=True),
+    Output("fin_render_progress", "children", allow_duplicate=True),
     Input("fin_results_store", "data"),
     Input("fin_sub_filter", "data"),
     State("fin_results_tabs", "value"),
+    State("fin_tabs_rendered", "data"),
     prevent_initial_call=True
 )
-def fin_render_mastergroup_tab(results_store, filter_value, current_tab):
-    """Render mastergroup tab with filtering"""
+def fin_render_mastergroup_tab(results_store, filter_value, current_tab, tabs_rendered):
+    """Render mastergroup tab with filtering - only renders once"""
     if not results_store:
-        return dbc.Alert("No results available.", color="secondary")
+        return no_update, no_update, no_update
     
+    # Check if this is a filter change on an already-rendered tab
+    ctx = callback_context
+    if tabs_rendered.get("mastergroup") and ctx.triggered and "fin_sub_filter" in ctx.triggered[0]["prop_id"]:
+        # Tab already rendered, just apply filter
+        data = results_store.get("mastergroup", [])
+        if current_tab == "tab_mastergroup" and filter_value and filter_value != "all":
+            data = [r for r in data if r.get("Match Status") == filter_value]
+        
+        if not data:
+            return dbc.Alert(f"No records found for filter: {filter_value}", color="info"), no_update, no_update
+        
+        display_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "Mastergroup Name", "Fuzzy Score", "Match Status"]
+        return _create_financial_datatable(data, display_cols), no_update, no_update
+    
+    # First time rendering
     data = results_store.get("mastergroup", [])
     if not data:
-        return dbc.Alert("No mastergroup data available.", color="secondary")
+        return dbc.Alert("No mastergroup data available.", color="secondary"), no_update, no_update
     
-    # Apply filter only if we're on this tab
+    # Apply filter if needed
     if current_tab == "tab_mastergroup" and filter_value and filter_value != "all":
         data = [r for r in data if r.get("Match Status") == filter_value]
     
     if not data:
-        return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
+        return dbc.Alert(f"No records found for filter: {filter_value}", color="info"), no_update, no_update
     
     display_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "Mastergroup Name", "Fuzzy Score", "Match Status"]
-    return _create_financial_datatable(data, display_cols)
+    table = _create_financial_datatable(data, display_cols)
+    
+    # Mark as rendered and update progress
+    tabs_rendered["mastergroup"] = True
+    progress = dbc.Alert("✓ Mastergroup Mapping ready", color="success", className="py-2 mb-2")
+    
+    return table, tabs_rendered, progress
 
 
-# Non-Financial tab rendering with filtering
+# Non-Financial tab rendering with filtering (renders once, then only filters)
 @app.callback(
     Output("fin_tab_nonfinancial_content", "children"),
+    Output("fin_tabs_rendered", "data", allow_duplicate=True),
+    Output("fin_render_progress", "children", allow_duplicate=True),
     Input("fin_results_store", "data"),
     Input("fin_sub_filter", "data"),
     State("fin_results_tabs", "value"),
+    State("fin_tabs_rendered", "data"),
     prevent_initial_call=True
 )
-def fin_render_nonfinancial_tab(results_store, filter_value, current_tab):
-    """Render non-financial tab with filtering"""
+def fin_render_nonfinancial_tab(results_store, filter_value, current_tab, tabs_rendered):
+    """Render non-financial tab with filtering - only renders once"""
     if not results_store:
-        return dbc.Alert("No results available.", color="secondary")
+        return no_update, no_update, no_update
     
+    # Check if this is a filter change on an already-rendered tab
+    ctx = callback_context
+    if tabs_rendered.get("nonfinancial") and ctx.triggered and "fin_sub_filter" in ctx.triggered[0]["prop_id"]:
+        # Tab already rendered, just apply filter
+        data = results_store.get("nonfinancial", [])
+        if current_tab == "tab_nonfinancial" and filter_value and filter_value != "all":
+            data = [r for r in data if r.get("Change Type") == filter_value]
+        
+        if not data:
+            return dbc.Alert(f"No records found for filter: {filter_value}", color="info"), no_update, no_update
+        
+        display_cols = ["Change Type", "Site Customer Number", "Site Customer Name", "Site Code", "Changed Fields", "Details"]
+        return _create_financial_datatable(data, display_cols), no_update, no_update
+    
+    # First time rendering
     data = results_store.get("nonfinancial", [])
     if not data:
-        return dbc.Alert("No non-financial changes detected.", color="info")
+        return dbc.Alert("No non-financial changes detected.", color="info"), no_update, no_update
     
-    # Apply filter only if we're on this tab
+    # Apply filter if needed
     if current_tab == "tab_nonfinancial" and filter_value and filter_value != "all":
         data = [r for r in data if r.get("Change Type") == filter_value]
     
     if not data:
-        return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
+        return dbc.Alert(f"No records found for filter: {filter_value}", color="info"), no_update, no_update
     
     display_cols = ["Change Type", "Site Customer Number", "Site Customer Name", "Site Code", "Changed Fields", "Details"]
-    return _create_financial_datatable(data, display_cols)
+    table = _create_financial_datatable(data, display_cols)
+    
+    # Mark as rendered and update progress
+    tabs_rendered["nonfinancial"] = True
+    progress_msg = "✓ Mastergroup Mapping ready | ✓ Non-Financial Changes ready"
+    progress = dbc.Alert(progress_msg, color="success", className="py-2 mb-2")
+    
+    return table, tabs_rendered, progress
 
 
-# Financial tab rendering with filtering
+# Financial tab rendering with filtering (renders once, then only filters)
 @app.callback(
     Output("fin_tab_financial_content", "children"),
+    Output("fin_tabs_rendered", "data", allow_duplicate=True),
+    Output("fin_render_progress", "children", allow_duplicate=True),
     Input("fin_results_store", "data"),
     Input("fin_sub_filter", "data"),
     State("fin_results_tabs", "value"),
+    State("fin_tabs_rendered", "data"),
     prevent_initial_call=True
 )
-def fin_render_financial_tab(results_store, filter_value, current_tab):
-    """Render financial tab with filtering"""
+def fin_render_financial_tab(results_store, filter_value, current_tab, tabs_rendered):
+    """Render financial tab with filtering - only renders once"""
     if not results_store:
-        return dbc.Alert("No results available.", color="secondary")
+        return no_update, no_update, no_update
     
+    # Check if this is a filter change on an already-rendered tab
+    ctx = callback_context
+    if tabs_rendered.get("financial") and ctx.triggered and "fin_sub_filter" in ctx.triggered[0]["prop_id"]:
+        # Tab already rendered, just apply filter
+        data = results_store.get("financial", [])
+        if current_tab == "tab_financial" and filter_value and filter_value != "all":
+            data = [r for r in data if r.get("TOI Status") == filter_value]
+        
+        if not data:
+            return dbc.Alert(f"No records found for filter: {filter_value}", color="info"), no_update, no_update
+        
+        display_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "TOI Previous", "TOI Current", "TOI Difference", "TOI Status"]
+        return _create_financial_datatable(data, display_cols), no_update, no_update
+    
+    # First time rendering
     data = results_store.get("financial", [])
     if not data:
-        return dbc.Alert("No financial data available.", color="secondary")
+        return dbc.Alert("No financial data available.", color="secondary"), no_update, no_update
     
-    # Apply filter only if we're on this tab using exact status match
+    # Apply filter if needed using exact status match
     if current_tab == "tab_financial" and filter_value and filter_value != "all":
         data = [r for r in data if r.get("TOI Status") == filter_value]
     
     if not data:
-        return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
+        return dbc.Alert(f"No records found for filter: {filter_value}", color="info"), no_update, no_update
     
     display_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "TOI Previous", "TOI Current", "TOI Difference", "TOI Status"]
-    return _create_financial_datatable(data, display_cols)
+    table = _create_financial_datatable(data, display_cols)
+    
+    # Mark as rendered and update progress
+    tabs_rendered["financial"] = True
+    progress_msg = "✓ Mastergroup Mapping ready | ✓ Non-Financial Changes ready | ✓ Financial Comparison ready"
+    progress = dbc.Alert(progress_msg, color="success", className="py-2 mb-2")
+    
+    return table, tabs_rendered, progress
 
 
-# Consolidated tab rendering (no filtering)
+# Consolidated tab rendering (no filtering, renders once)
 @app.callback(
     Output("fin_tab_consolidated_content", "children"),
+    Output("fin_tabs_rendered", "data", allow_duplicate=True),
+    Output("fin_render_progress", "children", allow_duplicate=True),
     Input("fin_results_store", "data"),
+    State("fin_tabs_rendered", "data"),
     prevent_initial_call=True
 )
-def fin_render_consolidated_tab(results_store):
-    """Render consolidated tab (no filtering)"""
+def fin_render_consolidated_tab(results_store, tabs_rendered):
+    """Render consolidated tab (no filtering) - only renders once"""
     if not results_store:
-        return dbc.Alert("No results available.", color="secondary")
+        return no_update, no_update, no_update
+    
+    # Check if already rendered
+    if tabs_rendered.get("consolidated"):
+        return no_update, no_update, no_update
     
     data = results_store.get("consolidated", [])
     if not data:
-        return dbc.Alert("No consolidated data available.", color="secondary")
+        return dbc.Alert("No consolidated data available.", color="secondary"), no_update, no_update
     
     # Show all columns for consolidated view
     columns = [{"name": k, "id": k} for k in data[0].keys()]
-    return dash_table.DataTable(
+    table = dash_table.DataTable(
         columns=columns,
         data=data,
         page_size=20,
@@ -2231,6 +2319,13 @@ def fin_render_consolidated_tab(results_store):
         tooltip_duration=None,
         css=[{"selector": ".dash-table-tooltip", "rule": "background-color: #333; color: white; font-size: 12px; max-width: 400px;"}]
     )
+    
+    # Mark as rendered and show final progress
+    tabs_rendered["consolidated"] = True
+    progress_msg = "✓ All tabs ready! Mastergroup | Non-Financial | Financial | Consolidated"
+    progress = dbc.Alert(progress_msg, color="success", className="py-2 mb-2")
+    
+    return table, tabs_rendered, progress
 
 
 
