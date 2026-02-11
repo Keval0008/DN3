@@ -1,0 +1,159 @@
+Analytics Avengers Dual Checks Tool
+Demo Script
+
+Pre-Demo Preparation
+•	Prepare 2-3 sample reference data files (.xlsx) with different run dates
+•	Prepare 2 sample financial data files (GBM or CMB format)
+•	Launch the application (should open in browser)
+•	Have both tabs ready to demonstrate
+•	Close any unnecessary browser tabs
+ 
+INTRODUCTION (1 minute)
+Opening Statement
+"Good [morning/afternoon] everyone. Today I'm excited to present the Analytics Avengers Dual Checks Tool - a solution that transforms how we handle data reconciliation."
+The Problem
+"Let me start with a challenge we all face: manual data reconciliation.
+Currently, teams spend 4-6 hours comparing Excel files manually, cell by cell. This process is:
+•	Extremely time-consuming
+•	Prone to human error
+•	Inconsistent across teams
+•	Difficult to audit
+And the consequences? Missed discrepancies can lead to inaccurate financial reporting, compliance risks, and poor business decisions."
+The Solution
+"Our tool solves this by automating the entire reconciliation process, reducing that 6-hour task to just 10 minutes, with 100% accuracy."
+ 
+TOOL OVERVIEW (1 minute)
+Show the Landing Page
+ACTION: Display the main application interface
+SAY: "The tool has two powerful modes, accessible through these tabs:
+1. Reference Data Reconciliation - For comparing master data like customer hierarchies and organizational structures
+2. Financial Data Reconciliation - For sophisticated financial analysis with three-layer validation
+Let me demonstrate both, starting with Reference Data."
+ 
+DEMO PART 1: REFERENCE DATA RECONCILIATION (4-5 minutes)
+Step 1: Navigate to Reference Tab
+ACTION: Click on "Reference Data Reconciliation" tab
+SAY: "The Reference tab helps us compare reference or master data files across different time periods."
+Step 2: Upload Files
+ACTION: Drag and drop 2-3 .xlsx files into the upload area OR click to browse and select files
+SAY: "First, I'll upload my data files. The interface supports drag-and-drop for convenience. Watch what happens..."
+OBSERVE: Loading indicator appears, Upload status message updates, File table appears showing uploaded files
+SAY: "Notice the tool automatically: Detects the header row in each file (scanning up to 80 rows), Extracts the run date from the file, Validates the data structure, Displays a summary table with file details"
+Step 3: File Selection
+ACTION: Point to the file selection area
+SAY: "Here's a smart feature: The tool performs a date validation check. It compares the run date in the file with the latest dates found in the data columns. If all files pass the date check, it automatically selects the current period file. If any file fails, you can manually select from the dropdown."
+Step 4: Select Previous Period
+ACTION: Select a file from the "Previous period data" dropdown
+SAY: "Now I'll select the previous period file for comparison. This could be last month, last quarter, or any reference point you need."
+Step 5: Configure Comparison Settings
+ACTION: Scroll to the "Comparison Settings" section
+SAY: "Before running the comparison, we can configure our settings: Key column (Mastergroup Name by default), Compare columns (choose specific or compare all). For this demo, I'll compare all columns."
+Step 6: Run Comparison
+ACTION: Click "Run Comparison" button
+SAY: "Now, let's run the comparison... And there we have it! The analysis is complete in seconds."
+Step 7: Review Summary Cards
+ACTION: Point to the summary cards showing Added, Deleted, Modified counts
+SAY: "The Comparison Summary gives us an instant overview: X Added rows, Y Deleted rows, Z Modified rows. These cards are interactive. Watch what happens when I click one..."
+OBSERVE: Table filters to show only modified records
+ACTION: Click on "Modified rows" card
+Step 8: Explore the Anomaly Table
+ACTION: Scroll through the anomaly table
+SAY: "This table shows every single change, with: Change Type, Key, Column Name, Current Value and Previous Value. The table supports native filtering, sorting, and pagination."
+ACTION: Demonstrate filtering by typing in a column, then sorting
+Step 9: Download Report
+ACTION: Click "Download Anomaly Report (.xlsx)" button
+SAY: "Finally, I can export everything to Excel with one click. This generates a comprehensive report with all changes documented - perfect for audit trails and further analysis."
+ 
+DEMO PART 2: FINANCIAL DATA RECONCILIATION (5-6 minutes)
+Step 1: Navigate to Financial Tab
+ACTION: Click on "Financial Data Reconciliation" tab
+SAY: "Now let's look at the Financial Data Reconciliation mode. This is more sophisticated, with three layers of analysis."
+Step 2: Upload Financial Files
+ACTION: Upload exactly 2 .xlsx files (GBM or CMB format)
+SAY: "For financial reconciliation, we upload exactly 2 files - current and previous period. These are typically GBM or CMB files."
+Step 3: Select Current and Previous Files
+ACTION: Select current period file from first dropdown, Select previous period file from second dropdown
+SAY: "I'll designate which file is current and which is previous..."
+Step 4: Validate Data
+ACTION: Click "Validate Data" button
+SAY: "Before running the full analysis, there's a validation step. This is crucial for data quality. The validation shows us: Sample data preview, Duplicate detection, Statistics. The tool automatically keeps the first occurrence and drops duplicates."
+Step 5: Run Analysis
+ACTION: Scroll to "Comparison Settings" and click "Run Analysis"
+SAY: "Now I'll run the full analysis. This executes three separate analyses in parallel..."
+Step 6: Review Layer 1 - Mastergroup Mapping
+ACTION: Click on "Mastergroup Mapping" tab
+SAY: "Layer 1: Mastergroup Mapping Validation. This uses fuzzy matching to validate logical relationships. It checks if the Site Customer Name logically matches the Mastergroup Name. The default threshold is 70%. Each record shows Match Status and Fuzzy Score."
+Step 7: Review Layer 2 - Non-Financial Changes
+ACTION: Click on "Non-Financial Changes" tab
+SAY: "Layer 2: Non-Financial Field Comparison. This tracks changes in descriptive fields like Customer status, GID information, Site details, Geographic data, and Organizational data."
+Step 8: Review Layer 3 - Financial Comparison
+ACTION: Click on "Financial Comparison" tab
+SAY: "Layer 3: Financial Metrics Comparison. This analyzes Total Operating Income (TOI), comparing current year TOI, prior year TOI, calculating variance and percentage changes."
+Step 9: Review Consolidated Report
+ACTION: Click on "Consolidated Report" tab
+SAY: "The Consolidated Report merges all three analyses into a unified view. For each record, you can see all statuses in one place, enabling cross-analysis insights."
+Step 10: Demonstrate Filtering
+ACTION: Use the filter dropdown and summary badges
+SAY: "The filtering system is very flexible. I can filter by change type, match status, and custom criteria. These summary badges show counts for each category at a glance."
+Step 11: Download Financial Report
+ACTION: Click "Download Report (.xlsx)" button
+SAY: "Finally, I can export the complete analysis to Excel. This creates a multi-sheet workbook with all four analyses, professionally formatted and ready for stakeholders."
+ 
+CLOSING & KEY BENEFITS (2 minutes)
+Summary of What We Saw
+Reference Mode: Upload multiple files, Automatic date validation, Comprehensive change tracking, Interactive filtering, One-click export
+Financial Mode: Three-layer analysis, Fuzzy matching, Duplicate detection, Consolidated reporting, Advanced filtering
+Key Benefits
+1.	Time Savings: 95%+ reduction - from 6 hours to 10 minutes
+2.	Accuracy: 100% detection rate - zero missed changes
+3.	Consistency: Standardized process across all teams
+4.	Audit Trail: Complete documentation of all changes
+5.	Self-Service: Business users can run without IT support
+6.	Scalability: Handles increasing data volumes effortlessly
+Technical Highlights
+•	Built with Dash/Plotly for modern, responsive interface
+•	Uses Pandas for high-performance data processing
+•	Calamine engine for fast Excel file reading
+•	Fuzzy matching with TheFuzz library
+•	Handles files up to 20MB efficiently
+•	Processes thousands of records in seconds
+ 
+Q&A PREPARATION
+Q: What file formats are supported?
+A: Currently Excel (.xlsx) files only. The tool uses the Calamine engine for fast, efficient reading.
+Q: How large can the files be?
+A: We've tested successfully with files up to 20MB. For larger files, we can optimize further.
+Q: Can we customize the columns being compared?
+A: Absolutely. You can select specific columns or compare all available columns.
+Q: What happens if there are duplicates?
+A: The tool detects duplicates, keeps the first occurrence, and reports how many were dropped in the validation preview.
+Q: Can we adjust the fuzzy matching threshold?
+A: Currently it's set at 70%, but this can be configured in the code if needed.
+Q: How is the data stored?
+A: All data is stored in-memory during the session. Nothing is persisted to disk except the reports you download.
+Q: Can multiple users use this simultaneously?
+A: Yes, each user gets their own session with a unique session ID.
+Q: What if the header row isn't detected correctly?
+A: There's a manual override option in the advanced settings where you can specify the exact header row.
+ 
+DEMO TIPS
+Before You Start
+•	Practice the demo flow 2-3 times
+•	Have backup sample files ready
+•	Test the application beforehand
+•	Clear browser cache if needed
+•	Close unnecessary applications
+During the Demo
+•	Speak clearly and at a moderate pace
+•	Pause after each major action to let it sink in
+•	Point to specific UI elements as you describe them
+•	Use the mouse cursor to guide attention
+•	Acknowledge any errors gracefully and have a backup plan
+Time Management
+•	Introduction: 1 min
+•	Tool Overview: 1 min
+•	Reference Demo: 4-5 min
+•	Financial Demo: 5-6 min
+•	Closing: 2 min
+•	Total: 13-15 minutes (leaving time for questions)
+Note: If time is limited, focus on ONE mode (Financial is more impressive) and mention the other briefly.
