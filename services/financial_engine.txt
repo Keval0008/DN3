@@ -314,12 +314,15 @@ def run_financial_comparison(
             toi_current = 0 if pd.isna(toi_current) else toi_current
             toi_previous = 0 if pd.isna(toi_previous) else toi_previous
             
-            if toi_current > toi_previous:
-                status = 'Increased'
+            # Determine status with detailed messages
+            if toi_current == 0 and toi_previous == 0:
+                status = 'No TOI data in current and previous data for this Site Customer'
+            elif toi_current > toi_previous:
+                status = 'Increased in current file'
             elif toi_current < toi_previous:
-                status = 'Decreased'
+                status = 'Decreased in current file'
             else:
-                status = 'No Change'
+                status = 'No TOI change in previous file and current file'
             
             results.append({
                 'Composite Key': key,
@@ -340,7 +343,7 @@ def run_financial_comparison(
                 'TOI Previous': 0,
                 'TOI Current': toi_current,
                 'TOI Difference': toi_current,
-                'TOI Status': 'New Record'
+                'TOI Status': 'No details of Site Customer in previous file'
             })
         else:  # in_previous only
             row_previous = previous_map.loc[key]
@@ -353,7 +356,7 @@ def run_financial_comparison(
                 'TOI Previous': toi_previous,
                 'TOI Current': 0,
                 'TOI Difference': -toi_previous,
-                'TOI Status': 'Deleted Record'
+                'TOI Status': 'No details of Site Customer in current file'
             })
     
     return pd.DataFrame(results)
@@ -399,15 +402,19 @@ def build_consolidated(
     # Start with mastergroup validation (has all current records)
     consolidated = df_mg.set_index('_composite_key')
     
-    # Merge non-financial changes
-    nf_status = df_nf.set_index('_composite_key')[['Change Type']] if not df_nf.empty else pd.DataFrame()
+    # Merge non-financial changes - include Details column
+    nf_cols = ['Change Type', 'Details'] if 'Details' in df_nf.columns else ['Change Type']
+    nf_status = df_nf.set_index('_composite_key')[nf_cols] if not df_nf.empty else pd.DataFrame()
     if not nf_status.empty:
         consolidated = consolidated.join(nf_status, how='left')
     else:
         consolidated['Change Type'] = 'No Change'
+        consolidated['Details'] = ''
     
     # Fill NaN in Change Type with 'No Change'
     consolidated['Change Type'] = consolidated['Change Type'].fillna('No Change')
+    if 'Details' in consolidated.columns:
+        consolidated['Details'] = consolidated['Details'].fillna('')
     
     # Merge financial comparison
     fin_cols = ['TOI Status', 'TOI Previous', 'TOI Current', 'TOI Difference']
@@ -424,8 +431,8 @@ def build_consolidated(
     # Reset index to get composite key as column
     consolidated = consolidated.reset_index()
     
-    # Reorder columns for better readability
-    key_columns = key_cols + ['Match Status', 'Fuzzy Score', 'Change Type', 'TOI Status', 
+    # Reorder columns for better readability - include Details
+    key_columns = key_cols + ['Match Status', 'Fuzzy Score', 'Change Type', 'Details', 'TOI Status', 
                                'TOI Previous', 'TOI Current', 'TOI Difference']
     other_columns = [col for col in consolidated.columns if col not in key_columns and col != '_composite_key']
     
