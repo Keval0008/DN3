@@ -2050,11 +2050,14 @@ def fin_toggle_tab_visibility(tab_value):
     return styles.get(tab_value, ({"display": "block"}, {"display": "none"}, {"display": "none"}, {"display": "none"}))
 
 
-# Helper function to create DataTable with common styling
+# Helper function to create DataTable with common styling (limited to 1000 rows)
 def _create_financial_datatable(data, display_cols):
-    """Create a DataTable with consistent styling"""
+    """Create a DataTable with consistent styling - limited to 1000 rows for performance"""
     if not data:
         return dbc.Alert("No data available.", color="secondary")
+    
+    # Limit to first 1000 rows for performance
+    data = data[:1000]
     
     # Filter data to only include display columns
     filtered_data = []
@@ -2194,13 +2197,16 @@ def fin_render_financial_tab(results_store, filter_value, current_tab):
     prevent_initial_call=True
 )
 def fin_render_consolidated_tab(results_store):
-    """Render consolidated tab (no filtering)"""
+    """Render consolidated tab (no filtering) - limited to 1000 rows"""
     if not results_store:
         return no_update
     
     data = results_store.get("consolidated", [])
     if not data:
         return dbc.Alert("No consolidated data available.", color="secondary")
+    
+    # Limit to first 1000 rows for performance
+    data = data[:1000]
     
     # Show all columns for consolidated view
     columns = [{"name": k, "id": k} for k in data[0].keys()]
