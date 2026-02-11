@@ -136,15 +136,6 @@ def reference_tab_layout():
         fluid=True,
         className="py-3",
         children=[
-            dcc.Store(id="session_store",storage_type="memory"),
-            dcc.Store(id="ref_files_store",storage_type="memory"),
-            dcc.Store(id="ref_meta_store",storage_type="memory"),
-            dcc.Store(id="diff_store",storage_type="memory"),
-            dcc.Store(id="report_path_store",storage_type="memory"),
-            dcc.Store(id="anomaly_records_store",storage_type="memory"),
-            dcc.Store(id="active_filter_store",storage_type="memory",data="all"),
-            dcc.Store(id="date_check_mode_store",storage_type="memory"),
-
             dbc.Row(
                 className="mb-2",
                 children=[
@@ -464,14 +455,6 @@ def financial_tab_layout():
         fluid=True,
         className="py-3",
         children=[
-            # Session stores
-            dcc.Store(id="fin_session_store", storage_type="memory"),
-            dcc.Store(id="fin_files_store", storage_type="memory"),
-            dcc.Store(id="fin_meta_store", storage_type="memory"),
-            dcc.Store(id="fin_results_store", storage_type="memory"),
-            dcc.Store(id="fin_report_path_store", storage_type="memory"),
-            dcc.Store(id="fin_validation_store", storage_type="memory"),
-            
             # Clear session button
             dbc.Row(
                 className="mb-2",
@@ -732,6 +715,35 @@ def financial_tab_layout():
                                                         dcc.Tab(label="Consolidated Report", value="tab_consolidated")
                                                     ]
                                                 ),
+                                                # Filter dropdown and summary
+                                                html.Div(
+                                                    id="fin_filter_section",
+                                                    className="mt-3",
+                                                    children=[
+                                                        dbc.Row(
+                                                            className="g-2 align-items-center",
+                                                            children=[
+                                                                dbc.Col(
+                                                                    md=4,
+                                                                    children=[
+                                                                        dbc.Label("Filter:", className="mb-1"),
+                                                                        dcc.Dropdown(
+                                                                            id="fin_sub_filter",
+                                                                            options=[],
+                                                                            value="all",
+                                                                            clearable=False,
+                                                                            placeholder="Select filter"
+                                                                        )
+                                                                    ]
+                                                                ),
+                                                                dbc.Col(
+                                                                    md=8,
+                                                                    children=html.Div(id="fin_filter_summary", className="d-flex gap-2 flex-wrap")
+                                                                )
+                                                            ]
+                                                        )
+                                                    ]
+                                                ),
                                                 dcc.Loading(
                                                     type="default",
                                                     children=html.Div(id="fin_results_content", className="mt-3")
@@ -778,6 +790,25 @@ app.layout = dbc.Container(
     fluid=True,
     className="py-3",
     children=[
+        # All stores moved here for persistence across tab switches
+        # Reference tab stores
+        dcc.Store(id="session_store", storage_type="memory"),
+        dcc.Store(id="ref_files_store", storage_type="memory"),
+        dcc.Store(id="ref_meta_store", storage_type="memory"),
+        dcc.Store(id="diff_store", storage_type="memory"),
+        dcc.Store(id="report_path_store", storage_type="memory"),
+        dcc.Store(id="anomaly_records_store", storage_type="memory"),
+        dcc.Store(id="active_filter_store", storage_type="memory", data="all"),
+        dcc.Store(id="date_check_mode_store", storage_type="memory"),
+        
+        # Financial tab stores
+        dcc.Store(id="fin_session_store", storage_type="memory"),
+        dcc.Store(id="fin_files_store", storage_type="memory"),
+        dcc.Store(id="fin_meta_store", storage_type="memory"),
+        dcc.Store(id="fin_results_store", storage_type="memory"),
+        dcc.Store(id="fin_report_path_store", storage_type="memory"),
+        dcc.Store(id="fin_validation_store", storage_type="memory"),
+        
         dbc.Row(
             className="mb-3",
             children=[
@@ -812,16 +843,22 @@ app.layout = dbc.Container(
                 dcc.Tab(label=TAB_FINANCIAL_LABEL, value="financial_tab"),
             ],
         ),
-        html.Div(id="tab_content", className="mt-3"),
+        # Both tabs rendered always, visibility toggled via CSS
+        html.Div(id="reference_tab_wrapper", className="mt-3", children=reference_tab_layout()),
+        html.Div(id="financial_tab_wrapper", className="mt-3", style={"display": "none"}, children=financial_tab_layout()),
     ]
 )
 
 @app.callback(
-    Output("tab_content", "children"),
+    Output("reference_tab_wrapper", "style"),
+    Output("financial_tab_wrapper", "style"),
     Input("main_tabs", "value")
 )
 def render_tab(tab_value):
-    return reference_tab_layout() if tab_value == "reference_tab" else financial_tab_layout()
+    """Toggle visibility of tab wrappers to preserve state"""
+    if tab_value == "reference_tab":
+        return {"display": "block"}, {"display": "none"}
+    return {"display": "none"}, {"display": "block"}
 
 @app.callback(
     Output("post_reference_sections", "style"),
@@ -1132,13 +1169,46 @@ def run_comparison(n_clicks,session_data,files_store,meta_store,ref_file_id,comp
 
     try:
         expected_for_detection = EXPECTED_COLUMNS_DEFAULT
-        main_header_row = int(main_hdr_override) if main_hdr_override else detect_header_row(
-            main["path"], expected_for_detection, max_rows=HEADER_SCAN_ROWS_MAX, max_cols=HEADER_SCAN_COLS_MAX
+        
+        # Parallelize header detection for both files
+        from concurrent.futures import ThreadPoolExecutor
+        
+        if main_hdr_override and ref_hdr_override:
+            # Both overridden, no need for parallel detection
+            main_header_row = int(main_hdr_override)
+            ref_header_row = int(ref_hdr_override)
+        elif main_hdr_override:
+            # Only main overridden
+            main_header_row = int(main_hdr_override)
+            ref_header_row = detect_header_row(
+                ref["path"], expected_for_detection, max_rows=HEADER_SCAN_ROWS_MAX, max_cols=HEADER_SCAN_COLS_MAX
             )
-
-        ref_header_row = int(ref_hdr_override) if ref_hdr_override else detect_header_row(
-            ref["path"], expected_for_detection, max_rows=HEADER_SCAN_ROWS_MAX, max_cols=HEADER_SCAN_COLS_MAX
-        )
+        elif ref_hdr_override:
+            # Only ref overridden
+            ref_header_row = int(ref_hdr_override)
+            main_header_row = detect_header_row(
+                main["path"], expected_for_detection, max_rows=HEADER_SCAN_ROWS_MAX, max_cols=HEADER_SCAN_COLS_MAX
+            )
+        else:
+            # Both need detection - run in parallel
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                fut_main = executor.submit(
+                    detect_header_row,
+                    main["path"], 
+                    expected_for_detection, 
+                    max_rows=HEADER_SCAN_ROWS_MAX, 
+                    max_cols=HEADER_SCAN_COLS_MAX
+                )
+                fut_ref = executor.submit(
+                    detect_header_row,
+                    ref["path"], 
+                    expected_for_detection, 
+                    max_rows=HEADER_SCAN_ROWS_MAX, 
+                    max_cols=HEADER_SCAN_COLS_MAX
+                )
+                
+                main_header_row = fut_main.result()
+                ref_header_row = fut_ref.result()
 
     except Exception as e:
         return (
@@ -1633,23 +1703,36 @@ def fin_run_analysis(n_clicks, session_data, files_store, meta_store, compare_co
         # Use selected compare columns or default
         compare_columns = compare_cols if compare_cols else FINANCIAL_NON_FINANCIAL_COLUMNS
         
-        # Analysis 1: Mastergroup Validation
-        df_mastergroup = run_mastergroup_validation(df_current, threshold=FINANCIAL_FUZZY_THRESHOLD)
+        # Run analyses in parallel using ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor
         
-        # Analysis 2: Non-Financial Comparison
-        df_nonfinancial = run_non_financial_comparison(
-            df_current, df_previous,
-            FINANCIAL_KEY_COLUMNS,
-            compare_columns
-        )
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            # Submit all three analyses concurrently
+            fut_mastergroup = executor.submit(
+                run_mastergroup_validation, 
+                df_current, 
+                FINANCIAL_FUZZY_THRESHOLD
+            )
+            fut_nonfinancial = executor.submit(
+                run_non_financial_comparison,
+                df_current, 
+                df_previous,
+                FINANCIAL_KEY_COLUMNS,
+                compare_columns
+            )
+            fut_financial = executor.submit(
+                run_financial_comparison,
+                df_current, 
+                df_previous,
+                FINANCIAL_KEY_COLUMNS
+            )
+            
+            # Wait for all to complete
+            df_mastergroup = fut_mastergroup.result()
+            df_nonfinancial = fut_nonfinancial.result()
+            df_financial = fut_financial.result()
         
-        # Analysis 3: Financial Comparison
-        df_financial = run_financial_comparison(
-            df_current, df_previous,
-            FINANCIAL_KEY_COLUMNS
-        )
-        
-        # Build Consolidated Report
+        # Build Consolidated Report (sequential - depends on all 3 results)
         df_consolidated = build_consolidated(
             df_mastergroup, df_nonfinancial, df_financial,
             FINANCIAL_KEY_COLUMNS
@@ -1714,13 +1797,94 @@ def fin_run_analysis(n_clicks, session_data, files_store, meta_store, compare_co
 
 
 @app.callback(
-    Output("fin_results_content", "children"),
+    Output("fin_sub_filter", "options"),
+    Output("fin_sub_filter", "value"),
+    Output("fin_filter_summary", "children"),
     Input("fin_results_tabs", "value"),
     State("fin_results_store", "data"),
     prevent_initial_call=True
 )
-def fin_render_results_tab(tab_value, results_store):
-    """Render the selected results tab"""
+def fin_update_filter_options(tab_value, results_store):
+    """Update filter dropdown options based on selected tab"""
+    if not results_store:
+        return [], "all", []
+    
+    summary = results_store.get("summary", {})
+    
+    if tab_value == "tab_mastergroup":
+        matched = summary.get("matched", 0)
+        not_matched = summary.get("not_matched", 0)
+        options = [
+            {"label": f"All ({matched + not_matched})", "value": "all"},
+            {"label": f"Matched ({matched})", "value": "Matched"},
+            {"label": f"Not Matched ({not_matched})", "value": "Not Matched"}
+        ]
+        badges = [
+            dbc.Badge(f"Matched: {matched}", color="success", className="me-2"),
+            dbc.Badge(f"Not Matched: {not_matched}", color="warning")
+        ]
+        return options, "all", badges
+    
+    elif tab_value == "tab_nonfinancial":
+        added = summary.get("added", 0)
+        modified = summary.get("modified", 0)
+        deleted = summary.get("deleted", 0)
+        options = [
+            {"label": f"All ({added + modified + deleted})", "value": "all"},
+            {"label": f"Added ({added})", "value": "Added"},
+            {"label": f"Modified ({modified})", "value": "Modified"},
+            {"label": f"Deleted ({deleted})", "value": "Deleted"}
+        ]
+        badges = [
+            dbc.Badge(f"Added: {added}", color="success", className="me-2"),
+            dbc.Badge(f"Modified: {modified}", color="info", className="me-2"),
+            dbc.Badge(f"Deleted: {deleted}", color="danger")
+        ]
+        return options, "all", badges
+    
+    elif tab_value == "tab_financial":
+        # Count TOI statuses from financial data - using partial matches for new detailed messages
+        fin_data = results_store.get("financial", [])
+        increased = sum(1 for r in fin_data if "Increased" in r.get("TOI Status", ""))
+        decreased = sum(1 for r in fin_data if "Decreased" in r.get("TOI Status", ""))
+        same = sum(1 for r in fin_data if "No TOI change" in r.get("TOI Status", ""))
+        no_data = sum(1 for r in fin_data if "No TOI data" in r.get("TOI Status", ""))
+        new_record = sum(1 for r in fin_data if "No details of Site Customer in previous file" in r.get("TOI Status", ""))
+        deleted_record = sum(1 for r in fin_data if "No details of Site Customer in current file" in r.get("TOI Status", ""))
+        
+        options = [
+            {"label": f"All ({len(fin_data)})", "value": "all"},
+            {"label": f"Increased ({increased})", "value": "Increased"},
+            {"label": f"Decreased ({decreased})", "value": "Decreased"},
+            {"label": f"Same ({same})", "value": "Same"},
+            {"label": f"No Data ({no_data})", "value": "No Data"},
+            {"label": f"New Record ({new_record})", "value": "New Record"},
+            {"label": f"Deleted Record ({deleted_record})", "value": "Deleted Record"}
+        ]
+        badges = [
+            dbc.Badge(f"Increased: {increased}", color="success", className="me-2"),
+            dbc.Badge(f"Decreased: {decreased}", color="danger", className="me-2"),
+            dbc.Badge(f"Same: {same}", color="secondary", className="me-2"),
+            dbc.Badge(f"No Data: {no_data}", color="warning", className="me-2"),
+            dbc.Badge(f"New: {new_record}", color="info", className="me-2"),
+            dbc.Badge(f"Deleted: {deleted_record}", color="dark")
+        ]
+        return options, "all", badges
+    
+    # Consolidated tab - no filter
+    return [], "all", []
+
+
+
+@app.callback(
+    Output("fin_results_content", "children"),
+    Input("fin_results_tabs", "value"),
+    Input("fin_sub_filter", "value"),
+    State("fin_results_store", "data"),
+    prevent_initial_call=True
+)
+def fin_render_results_tab(tab_value, filter_value, results_store):
+    """Render the selected results tab with filtering"""
     if not results_store:
         return dbc.Alert("No results available.", color="secondary")
     
@@ -1728,6 +1892,13 @@ def fin_render_results_tab(tab_value, results_store):
         data = results_store.get("mastergroup", [])
         if not data:
             return dbc.Alert("No mastergroup data available.", color="secondary")
+        
+        # Apply filter
+        if filter_value and filter_value != "all":
+            data = [r for r in data if r.get("Match Status") == filter_value]
+        
+        if not data:
+            return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
         
         columns = [{"name": k, "id": k} for k in data[0].keys()]
         return dash_table.DataTable(
@@ -1746,6 +1917,13 @@ def fin_render_results_tab(tab_value, results_store):
         if not data:
             return dbc.Alert("No non-financial changes detected.", color="info")
         
+        # Apply filter
+        if filter_value and filter_value != "all":
+            data = [r for r in data if r.get("Change Type") == filter_value]
+        
+        if not data:
+            return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
+        
         columns = [{"name": k, "id": k} for k in data[0].keys()]
         return dash_table.DataTable(
             columns=columns,
@@ -1762,6 +1940,24 @@ def fin_render_results_tab(tab_value, results_store):
         data = results_store.get("financial", [])
         if not data:
             return dbc.Alert("No financial data available.", color="secondary")
+        
+        # Apply filter - use partial matching for new detailed messages
+        if filter_value and filter_value != "all":
+            if filter_value == "Same":
+                data = [r for r in data if "No TOI change" in r.get("TOI Status", "")]
+            elif filter_value == "Increased":
+                data = [r for r in data if "Increased" in r.get("TOI Status", "")]
+            elif filter_value == "Decreased":
+                data = [r for r in data if "Decreased" in r.get("TOI Status", "")]
+            elif filter_value == "No Data":
+                data = [r for r in data if "No TOI data" in r.get("TOI Status", "")]
+            elif filter_value == "New Record":
+                data = [r for r in data if "No details of Site Customer in previous file" in r.get("TOI Status", "")]
+            elif filter_value == "Deleted Record":
+                data = [r for r in data if "No details of Site Customer in current file" in r.get("TOI Status", "")]
+        
+        if not data:
+            return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
         
         columns = [{"name": k, "id": k} for k in data[0].keys()]
         return dash_table.DataTable(
@@ -1821,10 +2017,11 @@ if __name__ == "__main__":
     def open_browser():
         webbrowser.open_new("http://127.0.0.1:8050/")
     
-    # Start browser in a separate thread after 1.5 seconds
-    timer = threading.Timer(1.5, open_browser)
-    timer.daemon = True
-    timer.start()
+    # Only open browser if not in reloader process (prevents double tabs in debug mode)
+    if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        timer = threading.Timer(1.5, open_browser)
+        timer.daemon = True
+        timer.start()
     
     # Run the Dash server
     app.run_server(debug=True)
