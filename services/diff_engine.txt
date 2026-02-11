@@ -21,8 +21,15 @@ def run_reference_check(
         main_filename: Optional[str] = None,
         ref_filename: Optional[str] = None
 ) -> Dict[str, Any]:
-    df_main = _read_table(main_path, main_header_row)
-    df_ref = _read_table(ref_path, ref_header_row)
+    # Read both files in parallel for faster processing
+    from concurrent.futures import ThreadPoolExecutor
+    
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        fut_main = executor.submit(_read_table, main_path, main_header_row)
+        fut_ref = executor.submit(_read_table, ref_path, ref_header_row)
+        
+        df_main = fut_main.result()
+        df_ref = fut_ref.result()
 
     key_column = norm_col(key_column)
     compare_columns = [norm_col(col) for col in compare_columns if norm_col(col)]
@@ -40,6 +47,7 @@ def run_reference_check(
     if not existing_compare:
         raise ValueError("No valid compare columns found in both tables.")
     
+    # Normalize keys
     df_main[key_column] = df_main[key_column].apply(norm_key)
     df_ref[key_column] = df_ref[key_column].apply(norm_key)
 
@@ -55,17 +63,31 @@ def run_reference_check(
         dup = df_ref[df_ref[key_column].duplicated(keep=False)][key_column].unique()
         raise ValueError(f"Duplicate keys found in reference table after normalization: {dup}")
     
-    main_map = df_main.set_index(key_column,drop=False)
-    ref_map = df_ref.set_index(key_column,drop=False)
-
-    main_keys = set(main_map.index.tolist())
-    ref_keys = set(ref_map.index.tolist())
-
-    added_keys = sorted(list(main_keys - ref_keys))
-    deleted_keys = sorted(list(ref_keys - main_keys))
-    common_keys = sorted(list(main_keys & ref_keys))
-
+    # Vectorized approach: merge to identify added/deleted/common
+    cols_to_compare = [key_column] + existing_compare
+    df_main_subset = df_main[cols_to_compare].copy()
+    df_ref_subset = df_ref[cols_to_compare].copy()
+    
+    # Merge with indicator to track source
+    merged = df_main_subset.merge(
+        df_ref_subset,
+        on=key_column,
+        how='outer',
+        suffixes=('_main', '_ref'),
+        indicator=True
+    )
+    
+    # Identify added, deleted, and common keys
+    added_mask = merged['_merge'] == 'left_only'
+    deleted_mask = merged['_merge'] == 'right_only'
+    common_mask = merged['_merge'] == 'both'
+    
+    added_keys = merged[added_mask][key_column].tolist()
+    deleted_keys = merged[deleted_mask][key_column].tolist()
+    
     anomalies = []
+    
+    # Added rows
     for k in added_keys:
         anomalies.append({
             "change_type": "Added",
@@ -75,6 +97,7 @@ def run_reference_check(
             "new_value": "(new row)",
         })
 
+    # Deleted rows
     for k in deleted_keys:
         anomalies.append({
             "change_type": "Deleted",
@@ -84,29 +107,44 @@ def run_reference_check(
             "new_value": "",
         })
 
-    modified_rows = 0
-    modified_cells = 0
-    for k in common_keys:
-        row_main = main_map.loc[k]
-        row_ref = ref_map.loc[k]
-
-        row_changed = False
+    # Vectorized comparison for common rows
+    common_df = merged[common_mask].copy()
+    
+    if len(common_df) > 0:
+        # For each compare column, check if values differ
         for col in existing_compare:
-            a = row_ref.get(col, None)
-            b = row_main.get(col, None)
-            if not values_equal(a, b):
-                modified_cells += 1
-                row_changed = True
-                anomalies.append({
-                    "change_type": "Modified",
-                    "key": k,
-                    "column_name": col,
-                    "old_value": a if pd.notna(a) else "",
-                    "new_value": b if pd.notna(b) else "",
-                })
-        if row_changed:
-            modified_rows += 1
-
+            col_main = f"{col}_main"
+            col_ref = f"{col}_ref"
+            
+            # Normalize values for comparison (fillna to handle NaN)
+            main_vals = common_df[col_main].fillna('').astype(str).str.strip()
+            ref_vals = common_df[col_ref].fillna('').astype(str).str.strip()
+            
+            # Find rows where values differ
+            diff_mask = main_vals != ref_vals
+            
+            if diff_mask.any():
+                # Extract the changed rows
+                changed_rows = common_df[diff_mask]
+                
+                for _, row in changed_rows.iterrows():
+                    old_val = row[col_ref]
+                    new_val = row[col_main]
+                    
+                    anomalies.append({
+                        "change_type": "Modified",
+                        "key": row[key_column],
+                        "column_name": col,
+                        "old_value": old_val if pd.notna(old_val) else "",
+                        "new_value": new_val if pd.notna(new_val) else "",
+                    })
+    
+    # Count modified rows and cells
+    modified_df = pd.DataFrame(anomalies)
+    modified_records = modified_df[modified_df['change_type'] == 'Modified']
+    modified_rows = modified_records['key'].nunique() if len(modified_records) > 0 else 0
+    modified_cells = len(modified_records)
+    
     anomalies_df = pd.DataFrame(anomalies, columns=["change_type", "key", "column_name", "old_value", "new_value"])
 
     summary = {
