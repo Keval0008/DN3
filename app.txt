@@ -5,7 +5,8 @@ from datetime import datetime
 import webbrowser
 import threading
 import dash
-from dash import dcc, html, Input, Output, State, no_update
+from dash import dcc, html, Input, Output, State, no_update, ALL, callback_context
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 from dash import dash_table
 from utils.constants import (APP_TITLE, TAB_FINANCIAL_LABEL, TAB_REFERENCE_LABEL, EXPECTED_COLUMNS_DEFAULT, KEY_COLUMN, HEADER_SCAN_COLS_MAX, HEADER_SCAN_ROWS_MAX,)
@@ -715,33 +716,13 @@ def financial_tab_layout():
                                                         dcc.Tab(label="Consolidated Report", value="tab_consolidated")
                                                     ]
                                                 ),
-                                                # Filter dropdown and summary
+                                                # Filter summary cards (no dropdown)
                                                 html.Div(
                                                     id="fin_filter_section",
                                                     className="mt-3",
                                                     children=[
-                                                        dbc.Row(
-                                                            className="g-2 align-items-center",
-                                                            children=[
-                                                                dbc.Col(
-                                                                    md=4,
-                                                                    children=[
-                                                                        dbc.Label("Filter:", className="mb-1"),
-                                                                        dcc.Dropdown(
-                                                                            id="fin_sub_filter",
-                                                                            options=[],
-                                                                            value="all",
-                                                                            clearable=False,
-                                                                            placeholder="Select filter"
-                                                                        )
-                                                                    ]
-                                                                ),
-                                                                dbc.Col(
-                                                                    md=8,
-                                                                    children=html.Div(id="fin_filter_summary", className="d-flex gap-2 flex-wrap")
-                                                                )
-                                                            ]
-                                                        )
+                                                        dcc.Store(id="fin_sub_filter", data="all"),  # Hidden store for filter value
+                                                        html.Div(id="fin_filter_summary", className="mb-3")
                                                     ]
                                                 ),
                                                 dcc.Loading(
@@ -1700,6 +1681,17 @@ def fin_run_analysis(n_clicks, session_data, files_store, meta_store, compare_co
             if col not in df_previous.columns:
                 raise ValueError(f"Column '{col}' not found in previous file")
         
+        # Pre-build composite keys ONCE (eliminates redundant work in each function)
+        from services.financial_engine import _build_composite_key
+        df_current['_composite_key'] = _build_composite_key(df_current, FINANCIAL_KEY_COLUMNS)
+        df_previous['_composite_key'] = _build_composite_key(df_previous, FINANCIAL_KEY_COLUMNS)
+        
+        # De-duplicate ONCE (eliminates redundant work in each function)
+        if df_current['_composite_key'].duplicated().any():
+            df_current = df_current.drop_duplicates(subset='_composite_key', keep='first')
+        if df_previous['_composite_key'].duplicated().any():
+            df_previous = df_previous.drop_duplicates(subset='_composite_key', keep='first')
+        
         # Use selected compare columns or default
         compare_columns = compare_cols if compare_cols else FINANCIAL_NON_FINANCIAL_COLUMNS
         
@@ -1797,94 +1789,198 @@ def fin_run_analysis(n_clicks, session_data, files_store, meta_store, compare_co
 
 
 @app.callback(
-    Output("fin_sub_filter", "options"),
-    Output("fin_sub_filter", "value"),
+    Output("fin_filter_section", "style"),
+    Input("fin_results_tabs", "value"),
+    prevent_initial_call=True
+)
+def fin_toggle_filter_section(tab_value):
+    """Hide filter section for consolidated tab"""
+    if tab_value == "tab_consolidated":
+        return {"display": "none"}
+    return {"display": "block"}
+
+
+@app.callback(
+    Output("fin_sub_filter", "data"),
     Output("fin_filter_summary", "children"),
     Input("fin_results_tabs", "value"),
     State("fin_results_store", "data"),
     prevent_initial_call=True
 )
 def fin_update_filter_options(tab_value, results_store):
-    """Update filter dropdown options based on selected tab"""
+    """Update filter summary cards based on selected tab"""
     if not results_store:
-        return [], "all", []
+        return "all", []
     
     summary = results_store.get("summary", {})
     
     if tab_value == "tab_mastergroup":
         matched = summary.get("matched", 0)
         not_matched = summary.get("not_matched", 0)
-        options = [
-            {"label": f"All ({matched + not_matched})", "value": "all"},
-            {"label": f"Matched ({matched})", "value": "Matched"},
-            {"label": f"Not Matched ({not_matched})", "value": "Not Matched"}
+        
+        cards = [
+            dbc.Card(
+                dbc.CardBody([
+                    html.H4(matched + not_matched, className="mb-0"),
+                    html.P("Total Records", className="text-muted mb-0 small")
+                ]),
+                className="text-center",
+                style={"cursor": "default"},
+                id={"type": "fin_filter_card", "index": "all"}
+            ),
+            dbc.Card(
+                dbc.CardBody([
+                    html.H4(matched, className="mb-0 text-success"),
+                    html.P("Matched", className="text-muted mb-0 small")
+                ]),
+                className="text-center",
+                style={"cursor": "pointer", "transition": "all 0.2s"},
+                id={"type": "fin_filter_card", "index": "Matched"}
+            ),
+            dbc.Card(
+                dbc.CardBody([
+                    html.H4(not_matched, className="mb-0 text-warning"),
+                    html.P("Not Matched", className="text-muted mb-0 small")
+                ]),
+                className="text-center",
+                style={"cursor": "pointer", "transition": "all 0.2s"},
+                id={"type": "fin_filter_card", "index": "Not Matched"}
+            )
         ]
-        badges = [
-            dbc.Badge(f"Matched: {matched}", color="success", className="me-2"),
-            dbc.Badge(f"Not Matched: {not_matched}", color="warning")
-        ]
-        return options, "all", badges
+        return "all", dbc.Row([dbc.Col(card, md=4) for card in cards], className="g-2")
     
     elif tab_value == "tab_nonfinancial":
         added = summary.get("added", 0)
         modified = summary.get("modified", 0)
         deleted = summary.get("deleted", 0)
-        options = [
-            {"label": f"All ({added + modified + deleted})", "value": "all"},
-            {"label": f"Added ({added})", "value": "Added"},
-            {"label": f"Modified ({modified})", "value": "Modified"},
-            {"label": f"Deleted ({deleted})", "value": "Deleted"}
+        
+        cards = [
+            dbc.Card(
+                dbc.CardBody([
+                    html.H4(added + modified + deleted, className="mb-0"),
+                    html.P("Total Changes", className="text-muted mb-0 small")
+                ]),
+                className="text-center",
+                style={"cursor": "default"},
+                id={"type": "fin_filter_card", "index": "all"}
+            ),
+            dbc.Card(
+                dbc.CardBody([
+                    html.H4(added, className="mb-0 text-success"),
+                    html.P("Added", className="text-muted mb-0 small")
+                ]),
+                className="text-center",
+                style={"cursor": "pointer", "transition": "all 0.2s"},
+                id={"type": "fin_filter_card", "index": "Added"}
+            ),
+            dbc.Card(
+                dbc.CardBody([
+                    html.H4(modified, className="mb-0 text-info"),
+                    html.P("Modified", className="text-muted mb-0 small")
+                ]),
+                className="text-center",
+                style={"cursor": "pointer", "transition": "all 0.2s"},
+                id={"type": "fin_filter_card", "index": "Modified"}
+            ),
+            dbc.Card(
+                dbc.CardBody([
+                    html.H4(deleted, className="mb-0 text-danger"),
+                    html.P("Deleted", className="text-muted mb-0 small")
+                ]),
+                className="text-center",
+                style={"cursor": "pointer", "transition": "all 0.2s"},
+                id={"type": "fin_filter_card", "index": "Deleted"}
+            )
         ]
-        badges = [
-            dbc.Badge(f"Added: {added}", color="success", className="me-2"),
-            dbc.Badge(f"Modified: {modified}", color="info", className="me-2"),
-            dbc.Badge(f"Deleted: {deleted}", color="danger")
-        ]
-        return options, "all", badges
+        return "all", dbc.Row([dbc.Col(card, md=3) for card in cards], className="g-2")
     
     elif tab_value == "tab_financial":
-        # Count TOI statuses from financial data - using partial matches for new detailed messages
+        # Count TOI statuses using exact terms
         fin_data = results_store.get("financial", [])
-        increased = sum(1 for r in fin_data if "Increased" in r.get("TOI Status", ""))
-        decreased = sum(1 for r in fin_data if "Decreased" in r.get("TOI Status", ""))
-        same = sum(1 for r in fin_data if "No TOI change" in r.get("TOI Status", ""))
-        no_data = sum(1 for r in fin_data if "No TOI data" in r.get("TOI Status", ""))
-        new_record = sum(1 for r in fin_data if "No details of Site Customer in previous file" in r.get("TOI Status", ""))
-        deleted_record = sum(1 for r in fin_data if "No details of Site Customer in current file" in r.get("TOI Status", ""))
+        status_counts = {}
+        for r in fin_data:
+            status = r.get("TOI Status", "")
+            status_counts[status] = status_counts.get(status, 0) + 1
         
-        options = [
-            {"label": f"All ({len(fin_data)})", "value": "all"},
-            {"label": f"Increased ({increased})", "value": "Increased"},
-            {"label": f"Decreased ({decreased})", "value": "Decreased"},
-            {"label": f"Same ({same})", "value": "Same"},
-            {"label": f"No Data ({no_data})", "value": "No Data"},
-            {"label": f"New Record ({new_record})", "value": "New Record"},
-            {"label": f"Deleted Record ({deleted_record})", "value": "Deleted Record"}
+        # Create cards for each unique status
+        cards = [
+            dbc.Card(
+                dbc.CardBody([
+                    html.H4(len(fin_data), className="mb-0"),
+                    html.P("Total Records", className="text-muted mb-0 small")
+                ]),
+                className="text-center",
+                style={"cursor": "default"},
+                id={"type": "fin_filter_card", "index": "all"}
+            )
         ]
-        badges = [
-            dbc.Badge(f"Increased: {increased}", color="success", className="me-2"),
-            dbc.Badge(f"Decreased: {decreased}", color="danger", className="me-2"),
-            dbc.Badge(f"Same: {same}", color="secondary", className="me-2"),
-            dbc.Badge(f"No Data: {no_data}", color="warning", className="me-2"),
-            dbc.Badge(f"New: {new_record}", color="info", className="me-2"),
-            dbc.Badge(f"Deleted: {deleted_record}", color="dark")
-        ]
-        return options, "all", badges
+        
+        # Color mapping for different statuses
+        color_map = {
+            "Increased in current file": "success",
+            "Decreased in current file": "danger",
+            "No TOI change in previous file and current file": "secondary",
+            "No TOI data in current and previous data for this Site Customer": "warning",
+            "No details of Site Customer in previous file": "info",
+            "No details of Site Customer in current file": "dark"
+        }
+        
+        for status, count in sorted(status_counts.items()):
+            color = color_map.get(status, "primary")
+            cards.append(
+                dbc.Card(
+                    dbc.CardBody([
+                        html.H4(count, className=f"mb-0 text-{color}"),
+                        html.P(status, className="text-muted mb-0 small", style={"fontSize": "11px"})
+                    ]),
+                    className="text-center",
+                    style={"cursor": "pointer", "transition": "all 0.2s"},
+                    id={"type": "fin_filter_card", "index": status}
+                )
+            )
+        
+        return "all", dbc.Row([dbc.Col(card, md=2) for card in cards], className="g-2")
     
     # Consolidated tab - no filter
-    return [], "all", []
+    return "all", []
 
+
+
+# Callback to handle card clicks for filtering
+@app.callback(
+    Output("fin_sub_filter", "data", allow_duplicate=True),
+    Input({"type": "fin_filter_card", "index": ALL}, "n_clicks"),
+    State({"type": "fin_filter_card", "index": ALL}, "id"),
+    prevent_initial_call=True
+)
+def fin_handle_card_click(n_clicks_list, card_ids):
+    """Handle clicks on summary cards to filter data"""
+    if not any(n_clicks_list):
+        raise PreventUpdate
+    
+    # Find which card was clicked
+    ctx = callback_context
+    if not ctx.triggered:
+        raise PreventUpdate
+    
+    triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    if triggered_id:
+        import json
+        card_id = json.loads(triggered_id)
+        return card_id["index"]
+    
+    raise PreventUpdate
 
 
 @app.callback(
     Output("fin_results_content", "children"),
     Input("fin_results_tabs", "value"),
-    Input("fin_sub_filter", "value"),
+    Input("fin_sub_filter", "data"),
     State("fin_results_store", "data"),
     prevent_initial_call=True
 )
 def fin_render_results_tab(tab_value, filter_value, results_store):
-    """Render the selected results tab with filtering"""
+    """Render the selected results tab with filtering and specific columns"""
     if not results_store:
         return dbc.Alert("No results available.", color="secondary")
     
@@ -1900,16 +1996,53 @@ def fin_render_results_tab(tab_value, filter_value, results_store):
         if not data:
             return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
         
-        columns = [{"name": k, "id": k} for k in data[0].keys()]
+        # Select specific columns
+        display_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "Mastergroup Name", "Fuzzy Score", "Match Status"]
+        
+        # Filter data to only include display columns
+        filtered_data = []
+        for row in data:
+            filtered_row = {col: row.get(col, "") for col in display_cols if col in row}
+            filtered_data.append(filtered_row)
+        
+        if not filtered_data:
+            return dbc.Alert("No data available with the selected columns.", color="warning")
+        
+        columns = [{"name": k, "id": k} for k in display_cols if k in filtered_data[0]]
+        
         return dash_table.DataTable(
             columns=columns,
-            data=data,
+            data=filtered_data,
             page_size=20,
             filter_action="native",
             sort_action="native",
             style_table={"overflowX": "auto"},
-            style_cell={"padding": "8px", "fontSize": "13px", "maxWidth": "200px", "overflow": "hidden", "textOverflow": "ellipsis"},
-            style_header={"backgroundColor": "#f8f9fa", "fontWeight": "bold"}
+            style_cell={
+                "padding": "8px", 
+                "fontSize": "13px", 
+                "minWidth": "100px",
+                "maxWidth": "300px",
+                "whiteSpace": "normal",
+                "height": "auto",
+                "textOverflow": "ellipsis"
+            },
+            style_data={
+                "whiteSpace": "normal",
+                "height": "auto",
+            },
+            style_header={
+                "backgroundColor": "#f8f9fa", 
+                "fontWeight": "bold",
+                "whiteSpace": "normal",
+                "height": "auto"
+            },
+            tooltip_data=[
+                {col: {"value": str(row.get(col, "")), "type": "markdown"} 
+                 for col in display_cols if col in row}
+                for row in filtered_data
+            ],
+            tooltip_duration=None,
+            css=[{"selector": ".dash-table-tooltip", "rule": "background-color: #333; color: white; font-size: 12px; max-width: 400px;"}]
         )
     
     elif tab_value == "tab_nonfinancial":
@@ -1924,16 +2057,53 @@ def fin_render_results_tab(tab_value, filter_value, results_store):
         if not data:
             return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
         
-        columns = [{"name": k, "id": k} for k in data[0].keys()]
+        # Select specific columns
+        display_cols = ["Change Type", "Site Customer Number", "Site Customer Name", "Site Code", "Changed Fields", "Details"]
+        
+        # Filter data to only include display columns
+        filtered_data = []
+        for row in data:
+            filtered_row = {col: row.get(col, "") for col in display_cols if col in row}
+            filtered_data.append(filtered_row)
+        
+        if not filtered_data:
+            return dbc.Alert("No data available with the selected columns.", color="warning")
+        
+        columns = [{"name": k, "id": k} for k in display_cols if k in filtered_data[0]]
+        
         return dash_table.DataTable(
             columns=columns,
-            data=data,
+            data=filtered_data,
             page_size=20,
             filter_action="native",
             sort_action="native",
             style_table={"overflowX": "auto"},
-            style_cell={"padding": "8px", "fontSize": "13px", "maxWidth": "200px", "overflow": "hidden", "textOverflow": "ellipsis"},
-            style_header={"backgroundColor": "#f8f9fa", "fontWeight": "bold"}
+            style_cell={
+                "padding": "8px", 
+                "fontSize": "13px", 
+                "minWidth": "100px",
+                "maxWidth": "300px",
+                "whiteSpace": "normal",
+                "height": "auto",
+                "textOverflow": "ellipsis"
+            },
+            style_data={
+                "whiteSpace": "normal",
+                "height": "auto",
+            },
+            style_header={
+                "backgroundColor": "#f8f9fa", 
+                "fontWeight": "bold",
+                "whiteSpace": "normal",
+                "height": "auto"
+            },
+            tooltip_data=[
+                {col: {"value": str(row.get(col, "")), "type": "markdown"} 
+                 for col in display_cols if col in row}
+                for row in filtered_data
+            ],
+            tooltip_duration=None,
+            css=[{"selector": ".dash-table-tooltip", "rule": "background-color: #333; color: white; font-size: 12px; max-width: 400px;"}]
         )
     
     elif tab_value == "tab_financial":
@@ -1941,34 +2111,60 @@ def fin_render_results_tab(tab_value, filter_value, results_store):
         if not data:
             return dbc.Alert("No financial data available.", color="secondary")
         
-        # Apply filter - use partial matching for new detailed messages
+        # Apply filter using exact status match
         if filter_value and filter_value != "all":
-            if filter_value == "Same":
-                data = [r for r in data if "No TOI change" in r.get("TOI Status", "")]
-            elif filter_value == "Increased":
-                data = [r for r in data if "Increased" in r.get("TOI Status", "")]
-            elif filter_value == "Decreased":
-                data = [r for r in data if "Decreased" in r.get("TOI Status", "")]
-            elif filter_value == "No Data":
-                data = [r for r in data if "No TOI data" in r.get("TOI Status", "")]
-            elif filter_value == "New Record":
-                data = [r for r in data if "No details of Site Customer in previous file" in r.get("TOI Status", "")]
-            elif filter_value == "Deleted Record":
-                data = [r for r in data if "No details of Site Customer in current file" in r.get("TOI Status", "")]
+            data = [r for r in data if r.get("TOI Status") == filter_value]
         
         if not data:
             return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
         
-        columns = [{"name": k, "id": k} for k in data[0].keys()]
+        # Select specific columns
+        display_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "TOI Previous", "TOI Current", "TOI Difference", "TOI Status"]
+        
+        # Filter data to only include display columns
+        filtered_data = []
+        for row in data:
+            filtered_row = {col: row.get(col, "") for col in display_cols if col in row}
+            filtered_data.append(filtered_row)
+        
+        if not filtered_data:
+            return dbc.Alert("No data available with the selected columns.", color="warning")
+        
+        columns = [{"name": k, "id": k} for k in display_cols if k in filtered_data[0]]
+        
         return dash_table.DataTable(
             columns=columns,
-            data=data,
+            data=filtered_data,
             page_size=20,
             filter_action="native",
             sort_action="native",
             style_table={"overflowX": "auto"},
-            style_cell={"padding": "8px", "fontSize": "13px", "maxWidth": "200px", "overflow": "hidden", "textOverflow": "ellipsis"},
-            style_header={"backgroundColor": "#f8f9fa", "fontWeight": "bold"}
+            style_cell={
+                "padding": "8px", 
+                "fontSize": "13px", 
+                "minWidth": "100px",
+                "maxWidth": "300px",
+                "whiteSpace": "normal",
+                "height": "auto",
+                "textOverflow": "ellipsis"
+            },
+            style_data={
+                "whiteSpace": "normal",
+                "height": "auto",
+            },
+            style_header={
+                "backgroundColor": "#f8f9fa", 
+                "fontWeight": "bold",
+                "whiteSpace": "normal",
+                "height": "auto"
+            },
+            tooltip_data=[
+                {col: {"value": str(row.get(col, "")), "type": "markdown"} 
+                 for col in display_cols if col in row}
+                for row in filtered_data
+            ],
+            tooltip_duration=None,
+            css=[{"selector": ".dash-table-tooltip", "rule": "background-color: #333; color: white; font-size: 12px; max-width: 400px;"}]
         )
     
     elif tab_value == "tab_consolidated":
@@ -1984,8 +2180,32 @@ def fin_render_results_tab(tab_value, filter_value, results_store):
             filter_action="native",
             sort_action="native",
             style_table={"overflowX": "auto"},
-            style_cell={"padding": "8px", "fontSize": "13px", "maxWidth": "200px", "overflow": "hidden", "textOverflow": "ellipsis"},
-            style_header={"backgroundColor": "#f8f9fa", "fontWeight": "bold"}
+            style_cell={
+                "padding": "8px", 
+                "fontSize": "13px", 
+                "minWidth": "100px",
+                "maxWidth": "300px",
+                "whiteSpace": "normal",
+                "height": "auto",
+                "textOverflow": "ellipsis"
+            },
+            style_data={
+                "whiteSpace": "normal",
+                "height": "auto",
+            },
+            style_header={
+                "backgroundColor": "#f8f9fa", 
+                "fontWeight": "bold",
+                "whiteSpace": "normal",
+                "height": "auto"
+            },
+            tooltip_data=[
+                {col: {"value": str(row.get(col, "")), "type": "markdown"} 
+                 for col in data[0].keys()}
+                for row in data
+            ],
+            tooltip_duration=None,
+            css=[{"selector": ".dash-table-tooltip", "rule": "background-color: #333; color: white; font-size: 12px; max-width: 400px;"}]
         )
     
     return dbc.Alert("Unknown tab selected.", color="warning")
