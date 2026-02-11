@@ -13,24 +13,31 @@ def _build_composite_key(df: pd.DataFrame, key_cols: List[str]) -> pd.Series:
 
 
 def _read_financial_file(path: str) -> pd.DataFrame:
-    """Read financial Excel file and normalize column names with auto header detection."""
-    from services.schema_detector import detect_header_row
+    """Read financial Excel file and normalize column names with inline header detection."""
     from utils.constants import FINANCIAL_EXPECTED_COLUMNS
     
-    # Auto-detect header row (search up to row 10)
-    try:
-        header_row_1based = detect_header_row(
-            path, 
-            FINANCIAL_EXPECTED_COLUMNS,
-            max_rows=10,
-            max_cols=50
-        )
-    except Exception as e:
-        # If detection fails, assume row 1
-        header_row_1based = 1
+    # Read entire file with no header (single read instead of 2 reads)
+    df_raw = pd.read_excel(path, header=None, nrows=50, engine='calamine')
     
-    # Read with detected header row
-    df = pd.read_excel(path, header=header_row_1based - 1, engine='calamine')
+    # Find header row in-memory (previously done via separate detect_header_row call)
+    expected_norm = set([norm_col(col) for col in FINANCIAL_EXPECTED_COLUMNS if norm_col(col)])
+    
+    best_row = 0
+    best_score = -1
+    
+    for r in range(min(10, len(df_raw))):  # Search first 10 rows
+        values = [norm_col(str(val)) for val in df_raw.iloc[r].values if pd.notna(val)]
+        score = sum(1 for v in values if v in expected_norm)
+        
+        if score > best_score:
+            best_score = score
+            best_row = r
+    
+    if best_score == 0:
+        raise ValueError("No header row detected with expected financial columns")
+    
+    # Now read the full file with the detected header row (single full read)
+    df = pd.read_excel(path, header=best_row, engine='calamine')
     
     # Remove unnamed columns
     df = df.loc[:, ~df.columns.to_series().apply(lambda x: str(x).startswith('Unnamed'))]
@@ -41,13 +48,27 @@ def _read_financial_file(path: str) -> pd.DataFrame:
     return df
 
 
+def read_financial_files_parallel(current_path: str, previous_path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Read both financial files in parallel for faster processing."""
+    from concurrent.futures import ThreadPoolExecutor
+    
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_current = executor.submit(_read_financial_file, current_path)
+        future_previous = executor.submit(_read_financial_file, previous_path)
+        
+        df_current = future_current.result()
+        df_previous = future_previous.result()
+    
+    return df_current, df_previous
+
+
 def validate_financial_files(
     current_path: str,
     previous_path: str,
     key_cols: List[str]
 ) -> Dict[str, Any]:
     """
-    Validate financial files and return statistics about duplicates.
+    Validate financial files and return statistics about duplicates plus prepared DataFrames.
     
     Args:
         current_path: Path to current file
@@ -55,11 +76,10 @@ def validate_financial_files(
         key_cols: List of key column names
     
     Returns:
-        Dictionary with validation statistics
+        Dictionary with validation statistics and prepared DataFrames
     """
-    # Read files
-    df_current = _read_financial_file(current_path)
-    df_previous = _read_financial_file(previous_path)
+    # Read files in parallel (much faster than sequential)
+    df_current, df_previous = read_financial_files_parallel(current_path, previous_path)
     
     # Build composite keys
     df_current['_composite_key'] = _build_composite_key(df_current, key_cols)
@@ -85,6 +105,12 @@ def validate_financial_files(
         dup_keys = df_previous[dup_mask]['_composite_key'].unique()
         previous_duplicates = dup_keys[:5].tolist()  # Sample of 5
     
+    # De-duplicate the DataFrames
+    if current_dup_count > 0:
+        df_current = df_current.drop_duplicates(subset='_composite_key', keep='first')
+    if previous_dup_count > 0:
+        df_previous = df_previous.drop_duplicates(subset='_composite_key', keep='first')
+    
     current_unique = current_total - current_dup_count
     previous_unique = previous_total - previous_dup_count
     
@@ -97,7 +123,10 @@ def validate_financial_files(
         "previous_unique_keys": previous_unique,
         "previous_duplicate_rows": previous_dup_count,
         "previous_duplicate_samples": previous_duplicates,
-        "has_duplicates": current_dup_count > 0 or previous_dup_count > 0
+        "has_duplicates": current_dup_count > 0 or previous_dup_count > 0,
+        # Return prepared DataFrames for caching
+        "df_current": df_current,
+        "df_previous": df_previous
     }
 
 
