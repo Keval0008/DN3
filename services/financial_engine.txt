@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional, Any
 import pandas as pd
-from thefuzz import fuzz
+import numpy as np
+from rapidfuzz import fuzz
 from utils.normalize import norm_col, norm_key, values_equal
 
 
@@ -116,23 +117,15 @@ def run_mastergroup_validation(df: pd.DataFrame, threshold: int = 70) -> pd.Data
     """
     result_df = df.copy()
     
-    def compute_match(row):
-        mastergroup = str(row.get('Mastergroup Name', '')).strip()
-        site_customer = str(row.get('Site Customer Name', '')).strip()
-        
-        if not mastergroup or not site_customer:
-            return 0, 'Not Matched'
-        
-        # Use token_set_ratio for better matching (handles word order, extra words)
-        score = fuzz.token_set_ratio(mastergroup, site_customer)
-        status = 'Matched' if score >= threshold else 'Not Matched'
-        
-        return score, status
+    # Vectorized approach: extract columns as lists and compute scores in batch
+    mg_vals = result_df['Mastergroup Name'].fillna('').astype(str).str.strip().tolist()
+    sc_vals = result_df['Site Customer Name'].fillna('').astype(str).str.strip().tolist()
     
-    # Apply fuzzy matching
-    result_df[['Fuzzy Score', 'Match Status']] = result_df.apply(
-        lambda row: pd.Series(compute_match(row)), axis=1
-    )
+    # Compute fuzzy scores using rapidfuzz (much faster than thefuzz)
+    scores = [fuzz.token_set_ratio(a, b) if a and b else 0 for a, b in zip(mg_vals, sc_vals)]
+    
+    result_df['Fuzzy Score'] = scores
+    result_df['Match Status'] = ['Matched' if s >= threshold else 'Not Matched' for s in scores]
     
     return result_df
 
@@ -158,12 +151,14 @@ def run_non_financial_comparison(
     Returns:
         DataFrame with Change Type and detail columns
     """
-    # Build composite keys
+    # Build composite keys if not already present
     df_current = df_current.copy()
     df_previous = df_previous.copy()
     
-    df_current['_composite_key'] = _build_composite_key(df_current, key_cols)
-    df_previous['_composite_key'] = _build_composite_key(df_previous, key_cols)
+    if '_composite_key' not in df_current.columns:
+        df_current['_composite_key'] = _build_composite_key(df_current, key_cols)
+    if '_composite_key' not in df_previous.columns:
+        df_previous['_composite_key'] = _build_composite_key(df_previous, key_cols)
     
     # Check for empty keys
     if (df_current['_composite_key'] == '').any():
@@ -171,84 +166,69 @@ def run_non_financial_comparison(
     if (df_previous['_composite_key'] == '').any():
         raise ValueError("Empty composite keys found in previous file")
     
-    # Handle duplicates: keep first occurrence, track what was dropped
-    current_duplicates = []
-    previous_duplicates = []
-    
+    # Handle duplicates: keep first occurrence
     if df_current['_composite_key'].duplicated().any():
-        dup_mask = df_current['_composite_key'].duplicated(keep='first')
-        dup_keys = df_current[dup_mask]['_composite_key'].unique()
-        current_duplicates = dup_keys.tolist()
-        # Keep only first occurrence
-        df_current = df_current[~dup_mask].copy()
-    
+        df_current = df_current.drop_duplicates(subset='_composite_key', keep='first')
     if df_previous['_composite_key'].duplicated().any():
-        dup_mask = df_previous['_composite_key'].duplicated(keep='first')
-        dup_keys = df_previous[dup_mask]['_composite_key'].unique()
-        previous_duplicates = dup_keys.tolist()
-        # Keep only first occurrence
-        df_previous = df_previous[~dup_mask].copy()
+        df_previous = df_previous.drop_duplicates(subset='_composite_key', keep='first')
     
-    current_map = df_current.set_index('_composite_key', drop=False)
-    previous_map = df_previous.set_index('_composite_key', drop=False)
-    
-    current_keys = set(current_map.index.tolist())
-    previous_keys = set(previous_map.index.tolist())
-    
-    added_keys = sorted(list(current_keys - previous_keys))
-    deleted_keys = sorted(list(previous_keys - current_keys))
-    common_keys = sorted(list(current_keys & previous_keys))
+    # Vectorized approach: use merge to identify added/deleted/common
+    merged = df_current.merge(
+        df_previous, 
+        on='_composite_key', 
+        how='outer', 
+        suffixes=('_curr', '_prev'),
+        indicator=True
+    )
     
     changes = []
     
-    # Added records
-    for key in added_keys:
-        row = current_map.loc[key]
+    # Added records (only in current)
+    added = merged[merged['_merge'] == 'left_only']
+    for _, row in added.iterrows():
         changes.append({
             'Change Type': 'Added',
-            'Composite Key': key,
-            **{col: row.get(col, '') for col in key_cols},
+            'Composite Key': row['_composite_key'],
+            **{col: row.get(f'{col}_curr', '') for col in key_cols},
             'Changed Fields': 'All (new record)',
             'Details': 'Record added in current file'
         })
     
-    # Deleted records
-    for key in deleted_keys:
-        row = previous_map.loc[key]
+    # Deleted records (only in previous)
+    deleted = merged[merged['_merge'] == 'right_only']
+    for _, row in deleted.iterrows():
         changes.append({
             'Change Type': 'Deleted',
-            'Composite Key': key,
-            **{col: row.get(col, '') for col in key_cols},
+            'Composite Key': row['_composite_key'],
+            **{col: row.get(f'{col}_prev', '') for col in key_cols},
             'Changed Fields': 'All (deleted record)',
             'Details': 'Record removed from current file'
         })
     
-    # Modified records
-    for key in common_keys:
-        row_current = current_map.loc[key]
-        row_previous = previous_map.loc[key]
-        
+    # Modified records (in both) - vectorized comparison
+    common = merged[merged['_merge'] == 'both']
+    for _, row in common.iterrows():
         changed_fields = []
         field_details = []
         
         for col in compare_cols:
             if col in key_cols:
-                continue  # Skip key columns
+                continue
             
-            val_current = row_current.get(col, None)
-            val_previous = row_previous.get(col, None)
+            val_curr = row.get(f'{col}_curr', None)
+            val_prev = row.get(f'{col}_prev', None)
             
-            if not values_equal(val_current, val_previous):
+            if not values_equal(val_curr, val_prev):
                 changed_fields.append(col)
-                old_val = val_previous if pd.notna(val_previous) else ''
-                new_val = val_current if pd.notna(val_current) else ''
+                old_val = val_prev if pd.notna(val_prev) else ''
+                new_val = val_curr if pd.notna(val_curr) else ''
                 field_details.append(f"{col}: '{old_val}' → '{new_val}'")
         
         if changed_fields:
             changes.append({
                 'Change Type': 'Modified',
-                'Composite Key': key,
-                **{col: row_current.get(col, '') for col in key_cols},
+                'Composite Key': row['_composite_key'],
+                **{col: row.get(f'{col}_curr', '') for col in key_cols},
                 'Changed Fields': ', '.join(changed_fields),
                 'Details': ' | '.join(field_details)
             })
@@ -277,89 +257,76 @@ def run_financial_comparison(
     df_current = df_current.copy()
     df_previous = df_previous.copy()
     
-    df_current['_composite_key'] = _build_composite_key(df_current, key_cols)
-    df_previous['_composite_key'] = _build_composite_key(df_previous, key_cols)
+    # Build composite keys if not already present
+    if '_composite_key' not in df_current.columns:
+        df_current['_composite_key'] = _build_composite_key(df_current, key_cols)
+    if '_composite_key' not in df_previous.columns:
+        df_previous['_composite_key'] = _build_composite_key(df_previous, key_cols)
     
     # Handle duplicates: keep first occurrence
     if df_current['_composite_key'].duplicated().any():
-        dup_mask = df_current['_composite_key'].duplicated(keep='first')
-        df_current = df_current[~dup_mask].copy()
-    
+        df_current = df_current.drop_duplicates(subset='_composite_key', keep='first')
     if df_previous['_composite_key'].duplicated().any():
-        dup_mask = df_previous['_composite_key'].duplicated(keep='first')
-        df_previous = df_previous[~dup_mask].copy()
-    
-    current_map = df_current.set_index('_composite_key', drop=False)
-    previous_map = df_previous.set_index('_composite_key', drop=False)
+        df_previous = df_previous.drop_duplicates(subset='_composite_key', keep='first')
     
     toi_col = 'Total Operating Income (HORIS YTD Financials)'
     
-    results = []
+    # Prepare dataframes with only needed columns
+    curr_cols = ['_composite_key'] + key_cols + [toi_col]
+    prev_cols = ['_composite_key', toi_col]
     
-    # Process all keys from both files
-    all_keys = set(current_map.index.tolist()) | set(previous_map.index.tolist())
+    df_curr_subset = df_current[curr_cols].copy()
+    df_prev_subset = df_previous[prev_cols].copy()
     
-    for key in sorted(all_keys):
-        in_current = key in current_map.index
-        in_previous = key in previous_map.index
-        
-        if in_current and in_previous:
-            row_current = current_map.loc[key]
-            row_previous = previous_map.loc[key]
-            
-            toi_current = pd.to_numeric(row_current.get(toi_col, 0), errors='coerce')
-            toi_previous = pd.to_numeric(row_previous.get(toi_col, 0), errors='coerce')
-            
-            # Handle NaN values
-            toi_current = 0 if pd.isna(toi_current) else toi_current
-            toi_previous = 0 if pd.isna(toi_previous) else toi_previous
-            
-            # Determine status with detailed messages
-            if toi_current == 0 and toi_previous == 0:
-                status = 'No TOI data in current and previous data for this Site Customer'
-            elif toi_current > toi_previous:
-                status = 'Increased in current file'
-            elif toi_current < toi_previous:
-                status = 'Decreased in current file'
-            else:
-                status = 'No TOI change in previous file and current file'
-            
-            results.append({
-                'Composite Key': key,
-                **{col: row_current.get(col, '') for col in key_cols},
-                'TOI Previous': toi_previous,
-                'TOI Current': toi_current,
-                'TOI Difference': toi_current - toi_previous,
-                'TOI Status': status
-            })
-        elif in_current:
-            row_current = current_map.loc[key]
-            toi_current = pd.to_numeric(row_current.get(toi_col, 0), errors='coerce')
-            toi_current = 0 if pd.isna(toi_current) else toi_current
-            
-            results.append({
-                'Composite Key': key,
-                **{col: row_current.get(col, '') for col in key_cols},
-                'TOI Previous': 0,
-                'TOI Current': toi_current,
-                'TOI Difference': toi_current,
-                'TOI Status': 'No details of Site Customer in previous file'
-            })
-        else:  # in_previous only
-            row_previous = previous_map.loc[key]
-            toi_previous = pd.to_numeric(row_previous.get(toi_col, 0), errors='coerce')
-            toi_previous = 0 if pd.isna(toi_previous) else toi_previous
-            
-            results.append({
-                'Composite Key': key,
-                **{col: row_previous.get(col, '') for col in key_cols},
-                'TOI Previous': toi_previous,
-                'TOI Current': 0,
-                'TOI Difference': -toi_previous,
-                'TOI Status': 'No details of Site Customer in current file'
-            })
+    # Vectorized merge: full outer join
+    merged = df_curr_subset.merge(
+        df_prev_subset,
+        on='_composite_key',
+        how='outer',
+        suffixes=('_curr', '_prev')
+    )
     
-    return pd.DataFrame(results)
+    # Convert TOI columns to numeric
+    merged['TOI Current'] = pd.to_numeric(merged.get(f'{toi_col}_curr', merged.get(toi_col, 0)), errors='coerce').fillna(0)
+    merged['TOI Previous'] = pd.to_numeric(merged.get(f'{toi_col}_prev', 0), errors='coerce').fillna(0)
+    merged['TOI Difference'] = merged['TOI Current'] - merged['TOI Previous']
+    
+    # Vectorized status assignment using np.select
+    conditions = [
+        (merged['TOI Current'] == 0) & (merged['TOI Previous'] == 0),
+        merged['TOI Current'] > merged['TOI Previous'],
+        merged['TOI Current'] < merged['TOI Previous'],
+        merged['TOI Current'] == merged['TOI Previous'],
+        merged[f'{toi_col}_curr'].isna(),  # Only in previous
+        merged[f'{toi_col}_prev'].isna()   # Only in current
+    ]
+    
+    choices = [
+        'No TOI data in current and previous data for this Site Customer',
+        'Increased in current file',
+        'Decreased in current file',
+        'No TOI change in previous file and current file',
+        'No details of Site Customer in current file',
+        'No details of Site Customer in previous file'
+    ]
+    
+    merged['TOI Status'] = np.select(conditions, choices, default='No TOI change in previous file and current file')
+    
+    # Build result with key columns
+    result_cols = ['_composite_key'] + key_cols + ['TOI Previous', 'TOI Current', 'TOI Difference', 'TOI Status']
+    
+    # For key columns, prefer current values, fall back to previous
+    for col in key_cols:
+        if f'{col}_curr' in merged.columns:
+            merged[col] = merged[f'{col}_curr'].fillna(merged.get(f'{col}_prev', ''))
+        elif col not in merged.columns:
+            merged[col] = ''
+    
+    # Rename composite key column
+    merged = merged.rename(columns={'_composite_key': 'Composite Key'})
+    result_cols[0] = 'Composite Key'
+    
+    return merged[result_cols]
 
 
 def build_consolidated(
