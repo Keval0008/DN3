@@ -725,13 +725,7 @@ def financial_tab_layout():
                                                         html.Div(id="fin_filter_summary", className="mb-3")
                                                     ]
                                                 ),
-                                                # Progress indicator for tab rendering
-                                                html.Div(
-                                                    id="fin_render_progress",
-                                                    className="mt-3 mb-2"
-                                                ),
-                                                # Stores to track which tabs have been rendered
-                                                dcc.Store(id="fin_tabs_rendered", data={"mastergroup": False, "nonfinancial": False, "financial": False, "consolidated": False}),
+
                                                 # Pre-rendered tab content divs (toggled with CSS)
                                                 html.Div(
                                                     className="mt-3",
@@ -1773,6 +1767,20 @@ def fin_run_analysis(n_clicks, session_data, files_store, meta_store, compare_co
             FINANCIAL_KEY_COLUMNS
         )
         
+        # Filter out None/NaN/empty Site Customer Name entries from all datasets
+        def _exclude_none_site_customer(df):
+            if 'Site Customer Name' in df.columns:
+                mask = df['Site Customer Name'].apply(
+                    lambda x: x is not None and str(x).strip() not in ('', 'nan', 'none', 'None', 'NaN')
+                )
+                return df[mask].copy()
+            return df
+        
+        df_mastergroup = _exclude_none_site_customer(df_mastergroup)
+        df_nonfinancial = _exclude_none_site_customer(df_nonfinancial)
+        df_financial = _exclude_none_site_customer(df_financial)
+        df_consolidated = _exclude_none_site_customer(df_consolidated)
+        
         # Generate report
         session_id = session_data["session_id"]
         out_dir = ensure_session_dir(session_id)
@@ -1796,7 +1804,7 @@ def fin_run_analysis(n_clicks, session_data, files_store, meta_store, compare_co
             "financial": df_financial.to_dict("records"),
             "consolidated": df_consolidated.to_dict("records"),
             "summary": {
-                "total_records": len(df_current),
+                "total_records": len(df_mastergroup),
                 "matched": len(df_mastergroup[df_mastergroup["Match Status"] == "Matched"]),
                 "not_matched": len(df_mastergroup[df_mastergroup["Match Status"] == "Not Matched"]),
                 "added": len(df_nonfinancial[df_nonfinancial["Change Type"] == "Added"]) if not df_nonfinancial.empty else 0,
@@ -1855,16 +1863,16 @@ def fin_update_filter_options(tab_value, results_store):
     if not results_store:
         return "all", []
     
-    summary = results_store.get("summary", {})
     
     if tab_value == "tab_mastergroup":
-        matched = summary.get("matched", 0)
-        not_matched = summary.get("not_matched", 0)
+        data = results_store.get("mastergroup", [])
+        matched = sum(1 for r in data if r.get("Match Status") == "Matched")
+        not_matched = sum(1 for r in data if r.get("Match Status") == "Not Matched")
         
         cards = [
             dbc.Card(
                 dbc.CardBody([
-                    html.H4(matched + not_matched, className="mb-0"),
+                    html.H4(len(data), className="mb-0"),
                     html.P("Total Records", className="text-muted mb-0 small")
                 ]),
                 className="text-center",
@@ -1896,14 +1904,15 @@ def fin_update_filter_options(tab_value, results_store):
         return "all", dbc.Row([dbc.Col(card, md=4) for card in cards], className="g-2")
     
     elif tab_value == "tab_nonfinancial":
-        added = summary.get("added", 0)
-        modified = summary.get("modified", 0)
-        deleted = summary.get("deleted", 0)
+        data = results_store.get("nonfinancial", [])
+        added = sum(1 for r in data if r.get("Change Type") == "Added")
+        modified = sum(1 for r in data if r.get("Change Type") == "Modified")
+        deleted = sum(1 for r in data if r.get("Change Type") == "Deleted")
         
         cards = [
             dbc.Card(
                 dbc.CardBody([
-                    html.H4(added + modified + deleted, className="mb-0"),
+                    html.H4(len(data), className="mb-0"),
                     html.P("Total Changes", className="text-muted mb-0 small")
                 ]),
                 className="text-center",
@@ -2106,144 +2115,63 @@ def _create_financial_datatable(data, display_cols):
     )
 
 
-# Mastergroup tab rendering with filtering (renders once, then only filters)
+# Single callback to render all tabs at once and handle card-click filtering
 @app.callback(
     Output("fin_tab_mastergroup_content", "children"),
-    Input("fin_results_store", "data"),
-    Input("fin_sub_filter", "data"),
-    State("fin_results_tabs", "value"),
-    prevent_initial_call=True
-)
-def fin_render_mastergroup_tab(results_store, filter_value, current_tab):
-    """Render mastergroup tab with filtering"""
-    if not results_store:
-        return no_update
-    
-    data = results_store.get("mastergroup", [])
-    if not data:
-        return dbc.Alert("No mastergroup data available.", color="secondary")
-    
-    # Apply filter if needed
-    if current_tab == "tab_mastergroup" and filter_value and filter_value != "all":
-        data = [r for r in data if r.get("Match Status") == filter_value]
-    
-    if not data:
-        return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
-    
-    display_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "Mastergroup Name", "Fuzzy Score", "Match Status"]
-    return _create_financial_datatable(data, display_cols)
-
-
-# Non-Financial tab rendering with filtering
-@app.callback(
     Output("fin_tab_nonfinancial_content", "children"),
-    Input("fin_results_store", "data"),
-    Input("fin_sub_filter", "data"),
-    State("fin_results_tabs", "value"),
-    prevent_initial_call=True
-)
-def fin_render_nonfinancial_tab(results_store, filter_value, current_tab):
-    """Render non-financial tab with filtering"""
-    if not results_store:
-        return no_update
-    
-    data = results_store.get("nonfinancial", [])
-    if not data:
-        return dbc.Alert("No non-financial changes detected.", color="info")
-    
-    # Apply filter if needed
-    if current_tab == "tab_nonfinancial" and filter_value and filter_value != "all":
-        data = [r for r in data if r.get("Change Type") == filter_value]
-    
-    if not data:
-        return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
-    
-    display_cols = ["Change Type", "Site Customer Number", "Site Customer Name", "Site Code", "Changed Fields", "Details"]
-    return _create_financial_datatable(data, display_cols)
-
-
-# Financial tab rendering with filtering
-@app.callback(
     Output("fin_tab_financial_content", "children"),
-    Input("fin_results_store", "data"),
-    Input("fin_sub_filter", "data"),
-    State("fin_results_tabs", "value"),
-    prevent_initial_call=True
-)
-def fin_render_financial_tab(results_store, filter_value, current_tab):
-    """Render financial tab with filtering"""
-    if not results_store:
-        return no_update
-    
-    data = results_store.get("financial", [])
-    if not data:
-        return dbc.Alert("No financial data available.", color="secondary")
-    
-    # Apply filter if needed using exact status match
-    if current_tab == "tab_financial" and filter_value and filter_value != "all":
-        data = [r for r in data if r.get("TOI Status") == filter_value]
-    
-    if not data:
-        return dbc.Alert(f"No records found for filter: {filter_value}", color="info")
-    
-    display_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "TOI Previous", "TOI Current", "TOI Difference", "TOI Status"]
-    return _create_financial_datatable(data, display_cols)
-
-
-# Consolidated tab rendering (no filtering)
-@app.callback(
     Output("fin_tab_consolidated_content", "children"),
     Input("fin_results_store", "data"),
+    Input("fin_sub_filter", "data"),
+    State("fin_results_tabs", "value"),
     prevent_initial_call=True
 )
-def fin_render_consolidated_tab(results_store):
-    """Render consolidated tab (no filtering) - limited to 1000 rows"""
+def fin_render_tabs(results_store, filter_value, current_tab):
+    """Render all tabs at once on analysis completion; filter active tab on card click"""
     if not results_store:
-        return no_update
+        return no_update, no_update, no_update, no_update
     
-    data = results_store.get("consolidated", [])
-    if not data:
-        return dbc.Alert("No consolidated data available.", color="secondary")
+    # Display columns per tab
+    mg_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "Mastergroup Name", "Fuzzy Score", "Match Status"]
+    nf_cols = ["Change Type", "Site Customer Number", "Site Customer Name", "Site Code", "Changed Fields", "Details"]
+    fin_cols = ["Site Customer Number", "Site Customer Name", "Site Code", "TOI Previous", "TOI Current", "TOI Difference", "TOI Status"]
     
-    # Limit to first 1000 rows for performance
-    data = data[:1000]
+    mg_data = results_store.get("mastergroup", [])
+    nf_data = results_store.get("nonfinancial", [])
+    fin_data = results_store.get("financial", [])
+    con_data = results_store.get("consolidated", [])
     
-    # Show all columns for consolidated view
-    columns = [{"name": k, "id": k} for k in data[0].keys()]
-    return dash_table.DataTable(
-        columns=columns,
-        data=data,
-        page_size=20,
-        filter_action="native",
-        sort_action="native",
-        style_table={"overflowX": "auto"},
-        style_cell={
-            "padding": "8px",
-            "fontSize": "13px",
-            "minWidth": "100px",
-            "maxWidth": "300px",
-            "whiteSpace": "normal",
-            "height": "auto",
-            "textOverflow": "ellipsis"
-        },
-        style_data={
-            "whiteSpace": "normal",
-            "height": "auto",
-        },
-        style_header={
-            "backgroundColor": "#f8f9fa",
-            "fontWeight": "bold",
-            "whiteSpace": "normal",
-            "height": "auto"
-        },
-        tooltip_data=[
-            {col: {"value": str(row.get(col, "")), "type": "markdown"}
-             for col in data[0].keys()}
-            for row in data
-        ],
-        tooltip_duration=None,
-        css=[{"selector": ".dash-table-tooltip", "rule": "background-color: #333; color: white; font-size: 12px; max-width: 400px;"}]
-    )
+    ctx = callback_context
+    triggered = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else ""
+    
+    # Initial render or "all" filter → render every tab with full data (up to 1000 rows)
+    if triggered == "fin_results_store" or not filter_value or filter_value == "all":
+        con_cols = list(con_data[0].keys()) if con_data else []
+        return (
+            _create_financial_datatable(mg_data, mg_cols),
+            _create_financial_datatable(nf_data, nf_cols),
+            _create_financial_datatable(fin_data, fin_cols),
+            _create_financial_datatable(con_data, con_cols),
+        )
+    
+    # Card-click filter → re-render only the active tab with filtered data (up to 1000 rows)
+    if current_tab == "tab_mastergroup":
+        filtered = [r for r in mg_data if r.get("Match Status") == filter_value]
+        if not filtered:
+            return dbc.Alert(f"No records for: {filter_value}", color="info"), no_update, no_update, no_update
+        return _create_financial_datatable(filtered, mg_cols), no_update, no_update, no_update
+    elif current_tab == "tab_nonfinancial":
+        filtered = [r for r in nf_data if r.get("Change Type") == filter_value]
+        if not filtered:
+            return no_update, dbc.Alert(f"No records for: {filter_value}", color="info"), no_update, no_update
+        return no_update, _create_financial_datatable(filtered, nf_cols), no_update, no_update
+    elif current_tab == "tab_financial":
+        filtered = [r for r in fin_data if r.get("TOI Status") == filter_value]
+        if not filtered:
+            return no_update, no_update, dbc.Alert(f"No records for: {filter_value}", color="info"), no_update
+        return no_update, no_update, _create_financial_datatable(filtered, fin_cols), no_update
+    
+    return no_update, no_update, no_update, no_update
 
 
 
